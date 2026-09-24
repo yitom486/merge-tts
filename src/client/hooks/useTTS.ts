@@ -1,12 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 
+export type ModelCategory = 'tts' | 'live' | 'other';
+
+
 export interface ModelInfo {
   id: string;
   name: string;
   displayName: string;
   description: string;
   isTtsRecommended: boolean;
+  category?: ModelCategory;
 }
+
 
 export interface VoiceInfo {
   id: string;

@@ -16,13 +16,13 @@ export const DEFAULT_VOICES: VoiceInfo[] = [
 /**
  * 动态从 Google Generative Language API 拉取可用模型列表
  * 坚决避免在前端或服务端死板硬编码
+ * 仅保留 TTS 语音诵读模型 与 Live/Omni 实时语音对话模型，剔除通用大语言/多模态/画图视频等冗余模型
  */
 export async function fetchRemoteModels(apiKey?: string): Promise<{ models: ModelInfo[]; source: 'remote' | 'fallback' }> {
   const key = apiKey || process.env.GEMINI_API_KEY;
 
   if (key) {
     try {
-      // 优先调用 Google 官方 REST API 获取完整模型清单
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`, {
         headers: { 'Accept': 'application/json' },
       });
@@ -30,46 +30,70 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
       if (res.ok) {
         const data = await res.json() as { models?: Array<{ name: string; displayName?: string; description?: string; supportedGenerationMethods?: string[] }> };
         if (data.models && Array.isArray(data.models)) {
-          const mappedModels: ModelInfo[] = data.models.map(m => {
+          // 仅过滤语音模型：TTS 模型 与 Live / 语音交互模型
+          const voiceModels: ModelInfo[] = [];
+
+          for (const m of data.models) {
             const cleanId = m.name.replace(/^models\//, '');
-            const isTts = cleanId.toLowerCase().includes('tts') ||
-              (m.displayName?.toLowerCase().includes('tts') ?? false) ||
-              (m.description?.toLowerCase().includes('text-to-speech') ?? false);
+            const lowerId = cleanId.toLowerCase();
+            const lowerDisp = (m.displayName || '').toLowerCase();
+            const lowerDesc = (m.description || '').toLowerCase();
 
-            return {
-              id: cleanId,
-              name: m.name,
-              displayName: m.displayName || cleanId,
-              description: m.description || '',
-              isTtsRecommended: isTts,
-            };
-          });
+            // 明确剔除通用大模型、嵌入、画图、视频、代码模型
+            const isExcluded = lowerId.includes('embedding') ||
+              lowerId.includes('image') ||
+              lowerId.includes('veo') ||
+              lowerId.includes('deep-research') ||
+              lowerId.includes('antigravity') ||
+              lowerId.includes('gemma') ||
+              lowerId.includes('aqa') ||
+              lowerId.includes('nano-banana') ||
+              lowerId.includes('robotics') ||
+              lowerId.includes('computer-use');
 
-          // 优先展示 TTS 模型，并按推荐程度排序
-          mappedModels.sort((a, b) => {
-            if (a.isTtsRecommended && !b.isTtsRecommended) return -1;
-            if (!a.isTtsRecommended && b.isTtsRecommended) return 1;
-            return a.id.localeCompare(b.id);
-          });
+            if (isExcluded) continue;
 
-          // 如果拉取到了包含 TTS 的模型，直接返回远程结果
-          if (mappedModels.some(m => m.isTtsRecommended)) {
-            return { models: mappedModels, source: 'remote' };
+            const isTts = lowerId.includes('tts') || lowerDisp.includes('tts') || lowerDesc.includes('text-to-speech');
+            const isLive = lowerId.includes('live') || lowerId.includes('omni') || lowerDisp.includes('live') || lowerDisp.includes('omni');
+
+            if (isTts) {
+              voiceModels.push({
+                id: cleanId,
+                name: m.name,
+                displayName: m.displayName || cleanId,
+                description: m.description || 'Google 专用高保真语音朗读与表演模型',
+                isTtsRecommended: true,
+                category: 'tts',
+              });
+            } else if (isLive) {
+              voiceModels.push({
+                id: cleanId,
+                name: m.name,
+                displayName: m.displayName || cleanId,
+                description: m.description || 'Google 实时多模态语音交互模型',
+                isTtsRecommended: false,
+                category: 'live',
+              });
+            }
           }
 
-          // 如果虽然 API 通畅但新 TTS 预览模型还未全局列出，注入 3.8 Flash TTS 并排在第一
-          const ttsModelIds = ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
-          const augmented = [
-            ...ttsModelIds.map(id => ({
-              id,
-              name: `models/${id}`,
-              displayName: id === 'gemini-3.8-flash-tts' ? 'Gemini 3.8 Flash TTS (高保真演播棚级)' : 'Gemini 3.8 Flash-Lite TTS (极速低延迟)',
-              description: 'Google 最新专用语音生成模型，支持行内表演标签与情绪控制',
-              isTtsRecommended: true,
-            })),
-            ...mappedModels.filter(m => !ttsModelIds.includes(m.id)),
-          ];
-          return { models: augmented, source: 'remote' };
+          // 排序规则：gemini-3.8-flash-tts 居首，其次 3.8 lite，再是其他 TTS，最后是 Live
+          voiceModels.sort((a, b) => {
+            const priority: Record<string, number> = {
+              'gemini-3.8-flash-tts': 100,
+              'gemini-3.8-flash-lite-tts': 90,
+              'gemini-3.1-flash-tts-preview': 80,
+              'gemini-2.5-flash-preview-tts': 70,
+              'gemini-2.5-pro-preview-tts': 60,
+            };
+            const pA = priority[a.id] || (a.category === 'tts' ? 50 : 10);
+            const pB = priority[b.id] || (b.category === 'tts' ? 50 : 10);
+            return pB - pA;
+          });
+
+          if (voiceModels.length > 0) {
+            return { models: voiceModels, source: 'remote' };
+          }
         }
       }
     } catch (err) {
@@ -77,7 +101,7 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
     }
   }
 
-  // 兜底（当尚未输入 Key 或网络离线时提供可用模型）
+  // 兜底备用模型
   const fallbackList: ModelInfo[] = [
     {
       id: 'gemini-3.8-flash-tts',
@@ -85,6 +109,7 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
       displayName: 'Gemini 3.8 Flash TTS (演播级旗舰)',
       description: '最高保真度、拟人呼吸感与表演控制，专为高质量配音和有声书设计',
       isTtsRecommended: true,
+      category: 'tts',
     },
     {
       id: 'gemini-3.8-flash-lite-tts',
@@ -92,6 +117,15 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
       displayName: 'Gemini 3.8 Flash-Lite TTS (极速轻量)',
       description: '优化低延迟与吞吐量，极高成本效益，适合实时呼叫与交互场景',
       isTtsRecommended: true,
+      category: 'tts',
+    },
+    {
+      id: 'gemini-3.1-flash-tts-preview',
+      name: 'models/gemini-3.1-flash-tts-preview',
+      displayName: 'Gemini 3.1 Flash TTS Preview',
+      description: '上一代预览版语音生成模型',
+      isTtsRecommended: false,
+      category: 'tts',
     },
   ];
 
