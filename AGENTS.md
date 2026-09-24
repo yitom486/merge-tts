@@ -170,9 +170,15 @@ d:/project/js/tts/gemini/
 
 ## 5. Gemini 3.8 Flash TTS 功能特性实现要点
 
-1. **动态模型拉取（无硬编码）**：
-   * 前端模型下拉菜单完全依赖 `/api/models` 实时响应。
-   * 服务端向 Google `GET /v1beta/models` 或通过 SDK `models.list()` 动态检索过滤包含 `tts` 标志或支持语音合成的模型，确保未来谷歌发布新 TTS 模型时零改动即可自动呈现。
+1. **完全动态模型拉取与版本自适应（100% 零硬编码）**：
+   * 前端模型选择与标签渲染完全依赖 `/api/models` 实时响应。
+   * 服务端向 Google `GET /v1beta/models` 或通过 SDK `models.list()` 动态检索过滤支持语音合成的模型。
+   * **动态版本自适应算法（Future-Proofing）**：
+     * 严禁在代码中写死 `gemini-3.8-flash-tts` 或硬编码优先级映射；
+     * 系统通过正则动态提取模型语义版本号（如 `gemini-4-flash-tts` -> `4.0`，`gemini-4.5-pro-tts` -> `4.5`）；
+     * 自动加权打分：版本号占主导分值，结合 Pro/Flash 旗舰与 Lite 规格层级，高版本模型永远全自动跃居榜首；
+     * 动态计算最高版本与阶梯标识（`flagship` 最新旗舰、`lite` 极速低延、`pro` 专业高质、`preview` 预览版），未来谷歌无论发布 Gemini 4、4.5 还是 5，系统均无需改动一行代码即可全自动接入并识别为最新旗舰。
+
 2. **行内表演标签快捷插入**：
    * 编辑器上方提供紧凑、轻量的药丸式标签条：
      * `[laughs]`（笑声）
