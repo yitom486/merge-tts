@@ -1,0 +1,59 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+@theme {
+  --color-app: hsl(var(--bg-app));
+  --color-card: hsl(var(--bg-card));
+  --color-subtle: hsl(var(--bg-subtle));
+  --color-hover: hsl(var(--bg-hover));
+
+  --color-fg-primary: hsl(var(--fg-primary));
+  --color-fg-secondary: hsl(var(--fg-secondary));
+  --color-fg-muted: hsl(var(--fg-muted));
+
+  --color-border-subtle: hsl(var(--border-subtle));
+  --color-border-focus: hsl(var(--border-focus));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-fg: hsl(var(--accent-fg));
+  --color-accent-hover: hsl(var(--accent-hover));
+
+  --color-tag-bg: hsl(var(--tag-bg));
+  --color-tag-border: hsl(var(--tag-border));
+  --color-tag-fg: hsl(var(--tag-fg));
+  --color-tag-hover: hsl(var(--tag-hover));
+
+  --color-status-success: hsl(var(--status-success));
+  --color-status-error: hsl(var(--status-error));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: hsl(var(--bg-app));
+  color: hsl(var(--fg-primary));
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 优雅的自定义滚动条（去工业笨重感） */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border-subtle));
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--fg-muted));
+}

@@ -1,0 +1,93 @@
+@layer base {
+  :root {
+    /* 基础色彩系统 (Light Theme) - 清淡自然、微灰白背景，不刺眼 */
+    --bg-app: 220 14% 97%;           /* #f4f6f8 柔和冷灰背景 */
+    --bg-card: 0 0% 100%;            /* #ffffff 纯白卡片 */
+    --bg-subtle: 220 14% 94%;        /* #edeff2 次级容器背景 */
+    --bg-hover: 220 14% 91%;         /* #e2e5e9 悬停背景 */
+
+    --fg-primary: 224 35% 10%;       /* #111827 高对比清晰正文 */
+    --fg-secondary: 220 12% 35%;     /* #4b5563 次级辅助文字 */
+    --fg-muted: 220 9% 55%;          /* #848d9a 弱化微小文字 */
+
+    /* 边框与分割线 */
+    --border-subtle: 220 13% 89%;    /* #dee1e6 1px 发丝边框 */
+    --border-focus: 224 35% 15%;     /* 聚焦高亮边框 */
+
+    /* 极简强调色 (Studio Accent) - 沉稳石板暗色，绝非刺眼荧光紫蓝 */
+    --accent: 222 47% 18%;           /* #192338 深海墨蓝 */
+    --accent-fg: 210 40% 98%;        /* 强调色内白字 */
+    --accent-hover: 222 47% 24%;
+
+    /* 行内标签专属 Token (用于 [laughs] 等拟真标签) */
+    --tag-bg: 220 14% 93%;
+    --tag-border: 220 13% 84%;
+    --tag-fg: 220 20% 25%;
+    --tag-hover: 220 14% 88%;
+
+    /* 状态与指示器 */
+    --status-success: 152 57% 38%;   /* 护眼暗绿 */
+    --status-error: 0 65% 51%;       /* 护眼砖红 */
+
+    /* 统一过渡常数 */
+    --theme-duration: 320ms;
+    --theme-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .dark {
+    /* 基础色彩系统 (Dark Theme) - 深邃克制岩石黑，非死黑，对比适中 */
+    --bg-app: 224 25% 7%;            /* #0e1219 深石板暗黑底 */
+    --bg-card: 224 22% 10%;          /* #141a24 卡片暗黑背景 */
+    --bg-subtle: 224 20% 14%;        /* #1b2230 次级暗容器 */
+    --bg-hover: 224 20% 18%;         /* #232c3e 悬停状态 */
+
+    --fg-primary: 210 20% 98%;       /* #f8fafc 纯白高对比文字 */
+    --fg-secondary: 217 12% 70%;     /* #a1abbb 次级灰白文字 */
+    --fg-muted: 217 10% 48%;         /* #687385 弱化暗灰文字 */
+
+    /* 边框与分割线 */
+    --border-subtle: 224 20% 16%;    /* #1e2637 暗发丝边框 */
+    --border-focus: 210 20% 80%;
+
+    /* 极简强调色 (Studio Accent - Dark) - 清爽亮石色 */
+    --accent: 210 25% 94%;           /* 亮色主体按键 */
+    --accent-fg: 224 35% 10%;        /* 暗底内黑字 */
+    --accent-hover: 210 25% 85%;
+
+    /* 行内标签专属 Token (Dark) */
+    --tag-bg: 224 20% 13%;
+    --tag-border: 224 20% 22%;
+    --tag-fg: 217 15% 78%;
+    --tag-hover: 224 20% 18%;
+
+    /* 状态与指示器 */
+    --status-success: 152 45% 55%;
+    --status-error: 0 65% 65%;
+  }
+}
+
+/* =========================================================================
+   全站统一主题切换动画同步机制 (Synchronized Theme Transition Lock)
+   当 html 被添加 .theme-transitioning 类名时，
+   页面所有参与色彩构成的元素强制共享完全相同的过渡时长与缓动贝塞尔曲线
+   ========================================================================= */
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+  transition: 
+    background-color var(--theme-duration) var(--theme-ease),
+    border-color var(--theme-duration) var(--theme-ease),
+    color var(--theme-duration) var(--theme-ease),
+    box-shadow var(--theme-duration) var(--theme-ease),
+    fill var(--theme-duration) var(--theme-ease),
+    stroke var(--theme-duration) var(--theme-ease) !important;
+  transition-delay: 0ms !important;
+}
+
+/* 原生 View Transition 模式动画 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
