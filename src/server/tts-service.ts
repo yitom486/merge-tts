@@ -14,6 +14,68 @@ export const DEFAULT_VOICES: VoiceInfo[] = [
 ];
 
 /**
+ * 动态从模型 ID 中提取数字版本号（完全自适应未来任意新版本，如 gemini-4, gemini-4.5 等）
+ */
+export function extractModelVersion(id: string): number {
+  const match = id.match(/gemini-(\d+(?:\.\d+)?)/i);
+  return match && match[1] ? parseFloat(match[1]) : 0;
+}
+
+/**
+ * 动态计算模型排序权重（零硬编码，自适应版本号与规格层级）
+ * 1. 版本号主导：更高版本永远在前（Gemini 4 > Gemini 3.8 > Gemini 2.5）
+ * 2. 类别权重：TTS 诵读模型排在 Live 前
+ * 3. 规格权重：Pro/Flash 旗舰优先于 Lite 极速轻量
+ * 4. 稳定性权重：正式版优先于 Preview 预览版
+ */
+export function calculateModelScore(id: string, category: ModelCategory): number {
+  const version = extractModelVersion(id);
+  const lowerId = id.toLowerCase();
+
+  let score = version * 1000;
+
+  if (category === 'tts') {
+    score += 500;
+  }
+
+  if (lowerId.includes('pro')) {
+    score += 150;
+  } else if (!lowerId.includes('lite')) {
+    score += 100;
+  } else {
+    score += 50;
+  }
+
+  if (!lowerId.includes('preview')) {
+    score += 25;
+  }
+
+  return score;
+}
+
+/**
+ * 动态推导模型梯队与特征标签（彻底摒弃写死特定版本）
+ */
+export function determineModelTier(id: string, category: ModelCategory, isMaxVersion: boolean): ModelTier {
+  const lowerId = id.toLowerCase();
+
+  if (category === 'live') {
+    return 'standard';
+  }
+
+  if (isMaxVersion) {
+    if (lowerId.includes('lite')) return 'lite';
+    if (lowerId.includes('pro')) return 'pro';
+    return 'flagship'; // 最高版本的标准/Flash 款作为最新旗舰
+  }
+
+  if (lowerId.includes('lite')) return 'lite';
+  if (lowerId.includes('pro')) return 'pro';
+  if (lowerId.includes('preview')) return 'preview';
+  return 'standard';
+}
+
+/**
  * 动态从 Google Generative Language API 拉取可用模型列表
  * 坚决避免在前端或服务端死板硬编码
  * 仅保留 TTS 语音诵读模型 与 Live/Omni 实时语音对话模型，剔除通用大语言/多模态/画图视频等冗余模型
@@ -31,7 +93,7 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
         const data = await res.json() as { models?: Array<{ name: string; displayName?: string; description?: string; supportedGenerationMethods?: string[] }> };
         if (data.models && Array.isArray(data.models)) {
           // 仅过滤语音模型：TTS 模型 与 Live / 语音交互模型
-          const voiceModels: ModelInfo[] = [];
+          const rawVoiceModels: Array<{ id: string; name: string; displayName: string; description: string; isTts: boolean; category: ModelCategory; version: number }> = [];
 
           for (const m of data.models) {
             const cleanId = m.name.replace(/^models\//, '');
@@ -57,39 +119,49 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
             const isLive = lowerId.includes('live') || lowerId.includes('omni') || lowerDisp.includes('live') || lowerDisp.includes('omni');
 
             if (isTts) {
-              voiceModels.push({
+              rawVoiceModels.push({
                 id: cleanId,
                 name: m.name,
                 displayName: m.displayName || cleanId,
                 description: m.description || 'Google 专用高保真语音朗读与表演模型',
-                isTtsRecommended: true,
+                isTts: true,
                 category: 'tts',
+                version: extractModelVersion(cleanId),
               });
             } else if (isLive) {
-              voiceModels.push({
+              rawVoiceModels.push({
                 id: cleanId,
                 name: m.name,
                 displayName: m.displayName || cleanId,
                 description: m.description || 'Google 实时多模态语音交互模型',
-                isTtsRecommended: false,
+                isTts: false,
                 category: 'live',
+                version: extractModelVersion(cleanId),
               });
             }
           }
 
-          // 排序规则：gemini-3.8-flash-tts 居首，其次 3.8 lite，再是其他 TTS，最后是 Live
-          voiceModels.sort((a, b) => {
-            const priority: Record<string, number> = {
-              'gemini-3.8-flash-tts': 100,
-              'gemini-3.8-flash-lite-tts': 90,
-              'gemini-3.1-flash-tts-preview': 80,
-              'gemini-2.5-flash-preview-tts': 70,
-              'gemini-2.5-pro-preview-tts': 60,
+          // 动态计算当前发现的最高 TTS 版本（如未来出现 4.0，maxTtsVersion 自动变为 4.0）
+          const maxTtsVersion = rawVoiceModels
+            .filter(m => m.category === 'tts')
+            .reduce((max, m) => Math.max(max, m.version), 0);
+
+          const voiceModels: ModelInfo[] = rawVoiceModels.map(m => {
+            const isMaxVersion = m.category === 'tts' && m.version === maxTtsVersion && maxTtsVersion > 0;
+            return {
+              id: m.id,
+              name: m.name,
+              displayName: m.displayName,
+              description: m.description,
+              isTtsRecommended: m.isTts,
+              category: m.category,
+              version: m.version,
+              tier: determineModelTier(m.id, m.category, isMaxVersion),
             };
-            const pA = priority[a.id] || (a.category === 'tts' ? 50 : 10);
-            const pB = priority[b.id] || (b.category === 'tts' ? 50 : 10);
-            return pB - pA;
           });
+
+          // 动态打分排序：高版本、高规格、正式版永远自动排在第一位
+          voiceModels.sort((a, b) => calculateModelScore(b.id, b.category) - calculateModelScore(a.id, a.category));
 
           if (voiceModels.length > 0) {
             return { models: voiceModels, source: 'remote' };
@@ -106,18 +178,22 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
     {
       id: 'gemini-3.8-flash-tts',
       name: 'models/gemini-3.8-flash-tts',
-      displayName: 'Gemini 3.8 Flash TTS (演播级旗舰)',
+      displayName: 'Gemini 3.8 Flash TTS',
       description: '最高保真度、拟人呼吸感与表演控制，专为高质量配音和有声书设计',
       isTtsRecommended: true,
       category: 'tts',
+      version: 3.8,
+      tier: 'flagship',
     },
     {
       id: 'gemini-3.8-flash-lite-tts',
       name: 'models/gemini-3.8-flash-lite-tts',
-      displayName: 'Gemini 3.8 Flash-Lite TTS (极速轻量)',
+      displayName: 'Gemini 3.8 Flash-Lite TTS',
       description: '优化低延迟与吞吐量，极高成本效益，适合实时呼叫与交互场景',
       isTtsRecommended: true,
       category: 'tts',
+      version: 3.8,
+      tier: 'lite',
     },
     {
       id: 'gemini-3.1-flash-tts-preview',
@@ -126,6 +202,8 @@ export async function fetchRemoteModels(apiKey?: string): Promise<{ models: Mode
       description: '上一代预览版语音生成模型',
       isTtsRecommended: false,
       category: 'tts',
+      version: 3.1,
+      tier: 'preview',
     },
   ];
 

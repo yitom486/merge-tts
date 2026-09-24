@@ -31,7 +31,10 @@ export function useTTS() {
 
   const [hasServerKey, setHasServerKey] = useState<boolean>(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash-tts');
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('gemini-selected-model') || '';
+  });
   const [modelsSource, setModelsSource] = useState<'remote' | 'fallback'>('fallback');
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
 
@@ -51,6 +54,12 @@ export function useTTS() {
     const trimmed = newKey.trim();
     setApiKeyState(trimmed);
     localStorage.setItem('gemini-user-api-key', trimmed);
+  }, []);
+
+  // 保存选择的模型
+  const handleSelectModel = useCallback((modelId: string) => {
+    setSelectedModel(modelId);
+    localStorage.setItem('gemini-selected-model', modelId);
   }, []);
 
   // 探测健康状态与服务器默认 Key 配置
@@ -80,11 +89,15 @@ export function useTTS() {
         if (data.models && data.models.length > 0) {
           setModels(data.models);
           setModelsSource(data.source);
-          // 若当前选中的模型不在新列表中，自动选第一个推荐的
-          if (!data.models.some(m => m.id === selectedModel)) {
-            const firstRecommended = data.models.find(m => m.isTtsRecommended);
-            setSelectedModel(firstRecommended ? firstRecommended.id : data.models[0].id);
-          }
+          // 若当前未选择或选择的模型已失效，自动选择排序第一位的最高分旗舰模型
+          setSelectedModel((prev) => {
+            if (prev && data.models.some((m) => m.id === prev)) {
+              return prev;
+            }
+            const topModel = data.models[0].id;
+            localStorage.setItem('gemini-selected-model', topModel);
+            return topModel;
+          });
         }
       }
     } catch (err: any) {
@@ -92,7 +105,8 @@ export function useTTS() {
     } finally {
       setIsLoadingModels(false);
     }
-  }, [apiKey, selectedModel]);
+  }, [apiKey]);
+
 
   // 从 /api/voices 拉取声音列表
   const fetchVoices = useCallback(async () => {
@@ -188,7 +202,7 @@ export function useTTS() {
     hasServerKey,
     models,
     selectedModel,
-    setSelectedModel,
+    setSelectedModel: handleSelectModel,
     modelsSource,
     isLoadingModels,
     refreshModels: fetchModels,

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Cpu, Check, RefreshCw, Radio, Sparkles, Volume2 } from 'lucide-react';
-import type { ModelInfo, ModelCategory } from '../hooks/useTTS';
+import { Volume2, Check, RefreshCw } from 'lucide-react';
+import type { ModelInfo } from '../hooks/useTTS';
 
 interface ModelPickerProps {
   models: ModelInfo[];
@@ -9,6 +9,46 @@ interface ModelPickerProps {
   isLoading: boolean;
   modelsSource: 'remote' | 'fallback';
   onRefresh: () => void;
+}
+
+/**
+ * 纯动态推导模型状态标签（无任何特定版本字符串硬编码，自动适配未来任意 Gemini 4、5 等版本）
+ */
+function getModelBadge(model: ModelInfo) {
+  if (model.tier === 'flagship') {
+    return {
+      label: '最新旗舰',
+      className: 'bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))] border-[hsl(var(--tag-border))] font-semibold',
+    };
+  }
+  if (model.tier === 'pro') {
+    return {
+      label: '专业高质',
+      className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
+    };
+  }
+  if (model.tier === 'lite') {
+    return {
+      label: '极速低延',
+      className: 'bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))] border-[hsl(var(--tag-border))]',
+    };
+  }
+  if (model.category === 'live') {
+    return {
+      label: 'Live 对话',
+      className: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20',
+    };
+  }
+  if (model.tier === 'preview' || model.id.toLowerCase().includes('preview')) {
+    return {
+      label: '预览版',
+      className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+    };
+  }
+  return {
+    label: 'TTS',
+    className: 'bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))] border-[hsl(var(--tag-border))]',
+  };
 }
 
 export const ModelPicker: React.FC<ModelPickerProps> = ({
@@ -31,11 +71,11 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* Header */}
+      {/* 标题与同步指示器 */}
       <div className="flex items-center justify-between">
         <label className="text-xs font-semibold text-[hsl(var(--fg-secondary))] flex items-center space-x-1.5">
           <Volume2 className="w-3.5 h-3.5 text-[hsl(var(--fg-muted))]" />
-          <span>语音专用模型 (动态筛选)</span>
+          <span>语音专用模型 (实时动态同步)</span>
         </label>
         <div className="flex items-center space-x-2">
           <span
@@ -45,7 +85,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
                 : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
             }`}
           >
-            {modelsSource === 'remote' ? '语音模型已同步' : '本地备用列表'}
+            {modelsSource === 'remote' ? 'API 实时同步' : '本地备用列表'}
           </span>
           <button
             onClick={onRefresh}
@@ -58,7 +98,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
         </div>
       </div>
 
-      {/* Category Tabs: 全部 / TTS 演播 / Live 对话 */}
+      {/* 分类标签条: 全部 / TTS 演播 / Live 对话 */}
       <div className="flex items-center space-x-1 p-0.5 rounded-lg border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))] text-xs">
         <button
           type="button"
@@ -97,12 +137,11 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
         )}
       </div>
 
-      {/* Filtered Models List */}
+      {/* 模型卡片列表（完全数据驱动，支持未来 Gemini 4、5 等自动置顶与自适应标记） */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {filteredModels.map((model) => {
           const isSelected = model.id === selectedModel;
-          const isFlagship = model.id === 'gemini-3.8-flash-tts';
-          const isLite = model.id === 'gemini-3.8-flash-lite-tts';
+          const badge = getModelBadge(model);
 
           return (
             <button
@@ -121,23 +160,11 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
                     <span className="text-xs font-semibold text-[hsl(var(--fg-primary))]">
                       {model.displayName || model.id}
                     </span>
-                    {isFlagship ? (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-medium bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))] border border-[hsl(var(--tag-border))]">
-                        旗舰演播
-                      </span>
-                    ) : isLite ? (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-medium bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))] border border-[hsl(var(--tag-border))]">
-                        极速低延
-                      </span>
-                    ) : model.category === 'live' ? (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-medium bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
-                        Live 对话
-                      </span>
-                    ) : (
-                      <span className="text-[10px] px-1 py-0.2 rounded font-mono bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))] border border-[hsl(var(--tag-border))]">
-                        TTS
-                      </span>
-                    )}
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded font-mono font-medium border ${badge.className}`}
+                    >
+                      {badge.label}
+                    </span>
                   </div>
                   <p className="text-[11px] text-[hsl(var(--fg-muted))] mt-1 line-clamp-2 leading-relaxed">
                     {model.description || model.id}
