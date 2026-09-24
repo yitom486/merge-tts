@@ -69,16 +69,21 @@
 /* =========================================================================
    全站统一主题切换动画同步机制 (Synchronized Theme Transition Lock)
    当 html 被添加 .theme-transitioning 类名时，
-   页面所有参与色彩构成的元素强制共享完全相同的过渡时长与缓动贝塞尔曲线
+   页面所有参与色彩构成的元素（包括滚动条、背景、边框、字体）
+   强制共享完全相同的过渡时长（320ms）与缓动贝塞尔曲线
    ========================================================================= */
 html.theme-transitioning,
 html.theme-transitioning *,
 html.theme-transitioning *::before,
-html.theme-transitioning *::after {
+html.theme-transitioning *::after,
+html.theme-transitioning *::-webkit-scrollbar,
+html.theme-transitioning *::-webkit-scrollbar-thumb,
+html.theme-transitioning *::-webkit-scrollbar-track {
   transition: 
     background-color var(--theme-duration) var(--theme-ease),
     border-color var(--theme-duration) var(--theme-ease),
     color var(--theme-duration) var(--theme-ease),
+    scrollbar-color var(--theme-duration) var(--theme-ease),
     box-shadow var(--theme-duration) var(--theme-ease),
     fill var(--theme-duration) var(--theme-ease),
     stroke var(--theme-duration) var(--theme-ease) !important;

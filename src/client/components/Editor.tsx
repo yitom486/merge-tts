@@ -77,7 +77,7 @@ export const Editor: React.FC<EditorProps> = ({
     <div className="flex flex-col rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] overflow-hidden shadow-xs">
       {/* 顶部表演标签药丸栏 */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))]">
-        <div className="flex items-center space-x-1.5 overflow-x-auto py-0.5">
+        <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar py-0.5">
           <span className="text-[11px] font-medium text-[hsl(var(--fg-muted))] mr-1 shrink-0">
             表演动作:
           </span>

@@ -42,6 +42,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 现代浏览器标准化滚动条属性与平滑色彩过渡 */
+html, body, * {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border-subtle)) transparent;
+}
+
 /* 优雅的自定义滚动条（去工业笨重感） */
 ::-webkit-scrollbar {
   width: 6px;
@@ -51,9 +57,22 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--border-subtle));
+  background-color: hsl(var(--border-subtle));
   border-radius: 9999px;
+  transition: background-color var(--theme-duration) var(--theme-ease);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--fg-muted));
+  background-color: hsl(var(--fg-muted));
 }
+
+/* 隐藏滚动条但保留滚动/滑动手势的实用类 */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
