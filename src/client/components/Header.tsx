@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Moon, KeyRound, Sparkles, RefreshCw } from 'lucide-react';
+import { Sun, Moon, KeyRound, RefreshCw, Play, Loader2 } from 'lucide-react';
 import type { Theme } from '../hooks/useTheme';
 
 interface HeaderProps {
@@ -11,6 +11,9 @@ interface HeaderProps {
   modelsSource: 'remote' | 'fallback';
   onRefreshModels: () => void;
   isRefreshingModels: boolean;
+  onGenerate?: () => void;
+  isGenerating?: boolean;
+  canGenerate?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +25,9 @@ export const Header: React.FC<HeaderProps> = ({
   modelsSource,
   onRefreshModels,
   isRefreshingModels,
+  onGenerate,
+  isGenerating,
+  canGenerate,
 }) => {
   return (
     <header className="w-full border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] px-6 py-3.5 sticky top-0 z-30">
@@ -29,7 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Brand / Logo */}
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 rounded-md bg-[hsl(var(--accent))] flex items-center justify-center text-[hsl(var(--accent-fg))] shadow-sm">
-            <span className="font-semibold text-sm tracking-tighter">3.8</span>
+            <span className="font-semibold text-sm tracking-tighter">TTS</span>
           </div>
           <div>
             <div className="flex items-center space-x-2">
@@ -61,6 +67,27 @@ export const Header: React.FC<HeaderProps> = ({
               <RefreshCw className={`w-3 h-3 ${isRefreshingModels ? 'animate-spin' : ''}`} />
             </button>
           </div>
+
+          {/* Quick Header Synthesize Button (随时随地一键生成) */}
+          {onGenerate && (
+            <button
+              onClick={onGenerate}
+              disabled={isGenerating || !canGenerate}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[hsl(var(--accent))] text-[hsl(var(--accent-fg))] hover:bg-[hsl(var(--accent-hover))] active:scale-95 transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span className="hidden sm:inline">渲染中...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>生成语音</span>
+                </>
+              )}
+            </button>
+          )}
 
           {/* API Key Modal Button */}
           <button

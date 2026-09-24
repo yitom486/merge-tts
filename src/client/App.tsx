@@ -8,7 +8,7 @@ import { VoicePicker } from './components/VoicePicker';
 import { ModelPicker } from './components/ModelPicker';
 import { StyleSelector } from './components/StyleSelector';
 import { AudioPlayer } from './components/AudioPlayer';
-import { Play, Loader2, AlertCircle, Sparkles, Sliders } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 
 export function App() {
   const { theme, toggleTheme } = useTheme();
@@ -50,7 +50,7 @@ export function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[hsl(var(--bg-app))] text-[hsl(var(--fg-primary))]">
-      {/* 顶部全局导航 */}
+      {/* 顶部全局导航（内置一键生成按键与动态模型状态） */}
       <Header
         theme={theme}
         toggleTheme={toggleTheme}
@@ -60,10 +60,13 @@ export function App() {
         modelsSource={modelsSource}
         onRefreshModels={refreshModels}
         isRefreshingModels={isLoadingModels}
+        onGenerate={generateAudio}
+        isGenerating={isGenerating}
+        canGenerate={Boolean(text.trim())}
       />
 
       {/* 主体工作台 */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-5">
         {/* 未配置 Key 时的清淡提示条 */}
         {!hasConfiguredKey && (
           <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3.5 flex items-center justify-between text-xs text-amber-700 dark:text-amber-300 animate-in fade-in duration-200">
@@ -108,17 +111,17 @@ export function App() {
           </div>
         )}
 
-        {/* 主控制台两列布局 */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* 左侧：输入与台词表演设置 (7 cols) */}
-          <div className="lg:col-span-7 space-y-5">
+        {/* 主控制台：两列极简流线型布局 */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+          {/* 左侧主要区域：剧本输入框（内嵌生成按钮） + 风格调优 + 实时监听播放器 (7 cols) */}
+          <div className="lg:col-span-7 space-y-4">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-[hsl(var(--fg-secondary))] uppercase tracking-wider">
                   台词与表演剧本 (Performance Script)
                 </span>
                 <span className="text-[11px] text-[hsl(var(--fg-muted))]">
-                  点击上方动作按钮可在光标处加入拟人呼吸与笑声
+                  支持行内情绪标签与 Ctrl + Enter 快捷生成
                 </span>
               </div>
               <Editor
@@ -126,6 +129,7 @@ export function App() {
                 onChange={setText}
                 onReset={handleResetSample}
                 isGenerating={isGenerating}
+                onGenerate={generateAudio}
               />
             </div>
 
@@ -137,11 +141,19 @@ export function App() {
                 disabled={isGenerating}
               />
             </div>
+
+            {/* 监听与下载播放器（置于输入框下方，声波立即可见，完全免去翻页查找） */}
+            <AudioPlayer
+              audioUrl={audioUrl}
+              audioBlob={audioBlob}
+              modelName={selectedModel}
+              voiceName={selectedVoice}
+            />
           </div>
 
-          {/* 右侧：模型架构、音色选择与监听台 (5 cols) */}
-          <div className="lg:col-span-5 space-y-5">
-            {/* 动态模型选择 */}
+          {/* 右侧设置区域：动态模型架构 + 精选音色库 (5 cols) */}
+          <div className="lg:col-span-5 space-y-4">
+            {/* 动态模型选择（自适应版本排序，支持 TTS / Live 分类） */}
             <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
               <ModelPicker
                 models={models}
@@ -153,7 +165,7 @@ export function App() {
               />
             </div>
 
-            {/* 音色库选择 */}
+            {/* 音色库选择（紧凑可滚动，带即时搜索，不挤占竖向空间） */}
             <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
               <VoicePicker
                 voices={voices}
@@ -162,42 +174,14 @@ export function App() {
                 isLoading={isLoadingVoices}
               />
             </div>
-
-            {/* 核心生成按键 */}
-            <button
-              type="button"
-              disabled={isGenerating || !text.trim()}
-              onClick={generateAudio}
-              className="w-full py-3 px-4 rounded-xl font-medium text-sm bg-[hsl(var(--accent))] text-[hsl(var(--accent-fg))] hover:bg-[hsl(var(--accent-hover))] active:scale-[0.99] transition-all shadow-sm flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>正在渲染高保真音频...</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>生成 Gemini 3.8 语音 (Synthesize)</span>
-                </>
-              )}
-            </button>
-
-            {/* 监听与下载播放器 */}
-            <AudioPlayer
-              audioUrl={audioUrl}
-              audioBlob={audioBlob}
-              modelName={selectedModel}
-              voiceName={selectedVoice}
-            />
           </div>
         </div>
       </main>
 
-      {/* 底部简约状态标 */}
+      {/* 底部极简状态栏 */}
       <footer className="w-full border-t border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] py-4 px-6 text-center text-xs text-[hsl(var(--fg-muted))]">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>Gemini 3.8 Flash TTS Studio • 录音棚级神经语音工程</span>
+          <span>Gemini TTS Studio • 录音棚级神经语音工程</span>
           <span>Google AI Studio • Bun • Hono • React • TailwindCSS</span>
         </div>
       </footer>

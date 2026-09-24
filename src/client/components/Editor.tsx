@@ -1,18 +1,18 @@
 import React, { useRef } from 'react';
-import { Sparkles, RotateCcw, Trash2, Smile, Wind, VolumeX, Pause, Activity } from 'lucide-react';
+import { RotateCcw, Trash2, Play, Loader2 } from 'lucide-react';
 
 interface EditorProps {
   text: string;
   onChange: (val: string) => void;
   onReset: () => void;
   isGenerating: boolean;
+  onGenerate?: () => void;
 }
 
 interface VocalTag {
   label: string;
   tag: string;
   description: string;
-  icon?: React.ReactNode;
 }
 
 const VOCAL_TAGS: VocalTag[] = [
@@ -29,6 +29,7 @@ export const Editor: React.FC<EditorProps> = ({
   onChange,
   onReset,
   isGenerating,
+  onGenerate,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -52,7 +53,6 @@ export const Editor: React.FC<EditorProps> = ({
     const newText = before + insertion + after;
     onChange(newText);
 
-    // 重新将光标置于标签之后
     setTimeout(() => {
       textarea.focus();
       const newPos = start + insertion.length;
@@ -60,12 +60,22 @@ export const Editor: React.FC<EditorProps> = ({
     }, 0);
   };
 
+  // 支持快捷键 Ctrl+Enter / Cmd+Enter 快速生成
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (!isGenerating && text.trim() && onGenerate) {
+        onGenerate();
+      }
+    }
+  };
+
   const charCount = text.length;
   const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
 
   return (
     <div className="flex flex-col rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] overflow-hidden shadow-xs">
-      {/* Top Bar: Vocal Performance Tags Toolbar */}
+      {/* 顶部表演标签药丸栏 */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))]">
         <div className="flex items-center space-x-1.5 overflow-x-auto py-0.5">
           <span className="text-[11px] font-medium text-[hsl(var(--fg-muted))] mr-1 shrink-0">
@@ -88,7 +98,7 @@ export const Editor: React.FC<EditorProps> = ({
           ))}
         </div>
 
-        {/* Text Actions */}
+        {/* 文本操作 */}
         <div className="flex items-center space-x-1 shrink-0 ml-auto">
           <button
             type="button"
@@ -112,29 +122,52 @@ export const Editor: React.FC<EditorProps> = ({
         </div>
       </div>
 
-      {/* Editor Main Text Area */}
+      {/* 输入文本主体 */}
       <div className="relative p-4">
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="在此输入需要由 Gemini 3.8 朗读的台词或文章，可点击上方按钮在光标处插入 [laughs]、[whispers] 等行内表演标签..."
-          rows={6}
+          onKeyDown={handleKeyDown}
+          placeholder="在此输入需要由 Gemini 朗读的台词或文章，可点击上方按钮在光标处插入 [laughs]、[whispers] 等行内表演标签..."
+          rows={7}
           disabled={isGenerating}
           className="w-full resize-y bg-transparent text-[hsl(var(--fg-primary))] text-sm leading-relaxed placeholder:text-[hsl(var(--fg-muted))] focus:outline-none font-normal"
         />
       </div>
 
-      {/* Bottom Counter Bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-t border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] text-[11px] text-[hsl(var(--fg-muted))] font-mono">
-        <div className="flex items-center space-x-3">
+      {/* 底部交互条：字符统计 + 即点即生成的快捷生成主按键 */}
+      <div className="flex items-center justify-between px-4 py-2 border-t border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))]">
+        <div className="flex items-center space-x-2 text-[11px] text-[hsl(var(--fg-muted))] font-mono">
           <span>{charCount} 字符</span>
           <span>•</span>
           <span>{wordCount} 词</span>
+          <span className="hidden sm:inline text-[10px] text-[hsl(var(--fg-muted))] font-sans pl-1">
+            (可按 Ctrl + Enter 快速生成)
+          </span>
         </div>
-        <div className="text-[10px] text-[hsl(var(--fg-muted))] font-sans hidden sm:block">
-          支持多语言朗读与情绪呼吸拟真
-        </div>
+
+        {/* 输入栏内嵌生成按钮 */}
+        {onGenerate && (
+          <button
+            type="button"
+            disabled={isGenerating || !text.trim()}
+            onClick={onGenerate}
+            className="px-3.5 py-1.5 rounded-lg font-medium text-xs bg-[hsl(var(--accent))] text-[hsl(var(--accent-fg))] hover:bg-[hsl(var(--accent-hover))] active:scale-95 transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>正在渲染...</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-3 h-3 fill-current" />
+                <span>生成语音</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );
