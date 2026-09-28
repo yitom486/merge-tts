@@ -138,6 +138,11 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
       </div>
 
       {/* 模型卡片列表（完全数据驱动，支持未来 Gemini 4、5 等自动置顶与自适应标记） */}
+      {filteredModels.length === 0 && (
+        <p className="text-[11px] text-[hsl(var(--fg-muted))] leading-relaxed">
+          该厂商无需选择模型（或模型列表拉取失败，见上方错误提示）。
+        </p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {filteredModels.map((model) => {
           const isSelected = model.id === selectedModel;

@@ -59,6 +59,31 @@ function normalizePrefix(prefix?: string): string {
 }
 
 /**
+ * SDK/REST 错误常为多层嵌套 JSON，逐层拆到最内层可读 message，
+ * 避免前端黄字里出现一坨转义 JSON。
+ */
+export function prettyApiError(raw: string): string {
+  let current = raw || '';
+  for (let i = 0; i < 4; i++) {
+    const m = current.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (!m) break;
+    let inner: string;
+    try {
+      inner = JSON.parse(`"${m[1]}"`);
+    } catch {
+      break;
+    }
+    if (!inner || inner === current) break;
+    if (/^\s*\{/.test(inner)) {
+      current = inner;
+      continue;
+    }
+    return inner;
+  }
+  return current.length > 500 ? `${current.slice(0, 500)}…` : current;
+}
+
+/**
  * 创建 TTS 通用服务（纯函数，无副作用，可被别的项目直接挂载）：
  * ```ts
  * import { createTTSApp } from 'gemini-tts-studio/server';
@@ -164,6 +189,9 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
       return c.json({ error: e?.message }, 400);
     }
     const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) {
+      return c.json({ error: `缺少 ${provider.displayName} API Key，无法拉取模型列表` }, 401);
+    }
     const region = resolveRegionForProvider(c);
 
     try {
@@ -171,6 +199,29 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
       return c.json(result);
     } catch (error: any) {
       return c.json({ error: error?.message || '拉取模型列表失败' }, 500);
+    }
+  });
+
+  /** GET {base}/models/:id 拉取指定模型详情（原生 SDK models.get） */
+  app.get(`${base}/models/:id`, async (c) => {
+    const providerId = resolveProviderId(c);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch (e: any) {
+      return c.json({ error: e?.message }, 400);
+    }
+    if (!provider.getModelDetail) {
+      return c.json({ error: `该厂商暂不支持模型详情（provider=${providerId}）` }, 400);
+    }
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) {
+      return c.json({ error: `缺少 ${provider.displayName} API Key，无法拉取模型详情` }, 401);
+    }
+    try {
+      return c.json({ model: await provider.getModelDetail(apiKey, c.req.param('id')) });
+    } catch (error: any) {
+      return c.json({ error: error?.message || '拉取模型详情失败' }, 500);
     }
   });
 
@@ -187,6 +238,9 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
       return c.json({ error: e?.message }, 400);
     }
     const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) {
+      return c.json({ error: `缺少 ${provider.displayName} API Key，无法拉取声音列表` }, 401);
+    }
     const region = resolveRegionForProvider(c);
 
     try {
@@ -342,6 +396,12 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
     if (!body.text || body.text.trim().length === 0) {
       return c.json({ error: '朗读文本不能为空' }, 400);
     }
+    if (!body.voiceName || body.voiceName.trim().length === 0) {
+      return c.json({ error: '未指定音色 voiceName' }, 400);
+    }
+    if (providerId === 'gemini' && (!body.model || body.model.trim().length === 0)) {
+      return c.json({ error: '未指定模型 model' }, 400);
+    }
 
     try {
       const { audioBuffer, mimeType } = await provider.synthesize(
@@ -363,7 +423,7 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
       });
     } catch (error: any) {
       console.error('TTS 生成失败:', error);
-      return c.json({ error: error?.message || '生成音频失败' }, 500);
+      return c.json({ error: prettyApiError(error?.message) || '生成音频失败' }, 500);
     }
   });
 
@@ -399,6 +459,12 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
     if (!body.text || body.text.trim().length === 0) {
       return c.json({ error: '朗读文本不能为空' }, 400);
     }
+    if (!body.voiceName || body.voiceName.trim().length === 0) {
+      return c.json({ error: '未指定音色 voiceName' }, 400);
+    }
+    if (providerId === 'gemini' && (!body.model || body.model.trim().length === 0)) {
+      return c.json({ error: '未指定模型 model' }, 400);
+    }
 
     const params = { ...body, provider: providerId, region: body.region || resolveRegionForProvider(c) };
     const encoder = new TextEncoder();
@@ -422,7 +488,7 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
           }
         } catch (error: any) {
           console.error('TTS 流式生成失败:', error);
-          send({ error: error?.message || '流式生成音频失败' });
+          send({ error: prettyApiError(error?.message) || '流式生成音频失败' });
         } finally {
           controller.close();
         }

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Wand2, Copy, Check, Trash2, FlaskConical, Loader2 } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Wand2, Copy, Check, Trash2, FlaskConical, Loader2, Play, Square } from 'lucide-react';
 import type { VoiceInfo } from '../hooks/useTTS';
 
 interface VoiceStudioProps {
@@ -18,6 +18,8 @@ interface VoiceStudioProps {
     consentFile: File;
   }) => Promise<{ id: string; key?: string }>;
   onDelete: (id: string) => Promise<void>;
+  /** 取官方试听小样（设计款免费直播；无小样返回 null） */
+  onPreviewSample: (id: string) => Promise<string | null>;
 }
 
 const CONSENT_TEXT = 'I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model.';
@@ -31,6 +33,7 @@ export const VoiceStudio: React.FC<VoiceStudioProps> = ({
   onDesign,
   onReplicate,
   onDelete,
+  onPreviewSample,
 }) => {
   const [mode, setMode] = useState<'design' | 'replicate'>('design');
   const [prompt, setPrompt] = useState('');
@@ -41,8 +44,43 @@ export const VoiceStudio: React.FC<VoiceStudioProps> = ({
   const [localError, setLocalError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<{ id: string; sampleUrl: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [samplePlayingId, setSamplePlayingId] = useState<string | null>(null);
+  const [sampleLoadingId, setSampleLoadingId] = useState<string | null>(null);
+  const sampleAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const customVoices = voices.filter((v) => v.kind && v.kind !== 'prebuilt');
+
+  /** 播官方小样（设计款免费；复刻款无小样会提示走合成试听） */
+  const playSample = async (id: string) => {
+    if (samplePlayingId === id) {
+      sampleAudioRef.current?.pause();
+      sampleAudioRef.current = null;
+      setSamplePlayingId(null);
+      return;
+    }
+    sampleAudioRef.current?.pause();
+    setSamplePlayingId(null);
+    setSampleLoadingId(id);
+    setLocalError(null);
+    try {
+      const url = await onPreviewSample(id);
+      if (!url) {
+        setLocalError('该音色无官方小样（复刻款），请去音色库点播放键合成试听');
+        return;
+      }
+      const audio = new Audio(url);
+      sampleAudioRef.current = audio;
+      audio.onended = () => setSamplePlayingId((cur) => (cur === id ? null : cur));
+      audio.onerror = () => setSamplePlayingId((cur) => (cur === id ? null : cur));
+      setSamplePlayingId(id);
+      await audio.play();
+    } catch (e: any) {
+      setLocalError(e?.message || '播放小样失败');
+      setSamplePlayingId(null);
+    } finally {
+      setSampleLoadingId(null);
+    }
+  };
 
   const runDesign = async () => {
     if (!prompt.trim()) {
@@ -249,6 +287,23 @@ export const VoiceStudio: React.FC<VoiceStudioProps> = ({
                 <p className="text-[10px] font-mono text-[hsl(var(--fg-muted))] truncate">{v.id}</p>
               </div>
               <div className="flex items-center space-x-1.5 shrink-0">
+                {v.kind === 'prompted' && (
+                  <button
+                    type="button"
+                    onClick={() => playSample(v.id)}
+                    disabled={busy || sampleLoadingId === v.id}
+                    title="播放官方试听小样（免费）"
+                    className="p-1 rounded text-[hsl(var(--fg-muted))] hover:text-[hsl(var(--accent))] cursor-pointer disabled:opacity-50"
+                  >
+                    {sampleLoadingId === v.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : samplePlayingId === v.id ? (
+                      <Square className="w-3.5 h-3.5 fill-current" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onSelectVoice(v.id)}

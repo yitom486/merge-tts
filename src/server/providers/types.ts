@@ -12,6 +12,8 @@ export interface TTSProvider {
 
   listModels(apiKey?: string, region?: string): Promise<{ models: ModelInfo[]; source: 'remote' | 'fallback' }>;
   listVoices(apiKey?: string, region?: string): Promise<VoiceInfo[]>;
+  /** 拉取指定模型详情（可选，未实现时路由返回 400） */
+  getModelDetail?(apiKey: string, modelId: string): Promise<ModelInfo>;
   synthesize(
     params: TTSGenerateRequest,
     apiKey: string

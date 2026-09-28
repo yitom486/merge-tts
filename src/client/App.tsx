@@ -14,9 +14,17 @@ import { AlertCircle } from 'lucide-react';
 export function App() {
   const { theme, toggleTheme } = useTheme();
   const {
+    provider,
+    setProvider,
+    providers,
     apiKey,
     setApiKey,
+    azureKey,
+    setAzureKey,
+    azureRegion,
+    setAzureRegion,
     hasServerKey,
+    providerServerKeys,
     models,
     selectedModel,
     setSelectedModel,
@@ -37,8 +45,11 @@ export function App() {
     setIsDialogue,
     secondVoice,
     setSecondVoice,
+    dialogueLabeled,
+    applyDialogueTemplate,
     isGenerating,
     isStreaming,
+    streamNote,
     streamedSeconds,
     streamedChunks,
     audioUrl,
@@ -47,15 +58,22 @@ export function App() {
     clearError,
     generateAudio,
     cancelGeneration,
+    auditioningId,
+    auditionVoice,
     isManagingVoice,
     designVoice,
     replicateVoice,
+    fetchVoiceSample,
     deleteVoice,
   } = useTTS();
 
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
 
-  const hasConfiguredKey = Boolean(apiKey || hasServerKey);
+  const azureServerKey = Boolean(providerServerKeys['azure']);
+  const activeServerKey = provider === 'azure' ? azureServerKey : hasServerKey;
+  const activeLocalKey = provider === 'azure' ? azureKey : apiKey;
+  const hasConfiguredKey = Boolean(activeLocalKey || activeServerKey);
+  const isGemini = provider === 'gemini';
 
   const handleResetSample = () => {
     setText(
@@ -88,7 +106,7 @@ export function App() {
             <div className="flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>
-                检测到尚未配置 Gemini API Key。请点击右侧按钮输入，或在根目录 <code className="font-mono bg-amber-500/20 px-1 py-0.5 rounded">.env</code> 中添加。
+                检测到当前厂商（{provider === 'azure' ? 'Azure Speech' : 'Gemini'}）尚未配置 API Key。请点击右侧按钮输入，或在根目录 <code className="font-mono bg-amber-500/20 px-1 py-0.5 rounded">.env</code> 中添加。
               </span>
             </div>
             <button
@@ -148,7 +166,8 @@ export function App() {
               />
             </div>
 
-            {/* 演播风格调优 */}
+            {/* 演播风格调优（仅 Gemini；Azure 不支持风格与表演标签） */}
+            {isGemini && (
             <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs space-y-3">
               <StyleSelector
                 style={speechStyle}
@@ -181,8 +200,10 @@ export function App() {
                 </select>
               </div>
             </div>
+            )}
 
-            {/* 双人对话模式（官方 multi-speaker）：剧本用 Speaker 1: / Speaker 2: 开头分角色 */}
+            {/* 双人对话模式（官方 multi-speaker，仅 Gemini）：剧本用 Speaker 1: / Speaker 2: 开头分角色 */}
+            {isGemini && (
             <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
               <label className="flex items-center space-x-2 text-xs cursor-pointer select-none">
                 <input
@@ -193,43 +214,109 @@ export function App() {
                   className="w-3.5 h-3.5 accent-[hsl(var(--accent))]"
                 />
                 <span className="font-medium text-[hsl(var(--fg-primary))]">双人对话模式</span>
-                <span className="text-[11px] text-[hsl(var(--fg-muted))]">Speaker 1 用主音色，Speaker 2 用下方音色</span>
+                <span className="text-[11px] text-[hsl(var(--fg-muted))]">下方分别为两路角色独立选角</span>
               </label>
               {isDialogue && (
-                <div className="mt-2.5 flex items-center space-x-2 text-xs">
-                  <span className="text-[hsl(var(--fg-muted))] shrink-0">Speaker 2 音色</span>
-                  <select
-                    value={secondVoice}
-                    onChange={(e) => setSecondVoice(e.target.value)}
-                    disabled={isGenerating}
-                    className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))] text-[hsl(var(--fg-primary))] text-xs outline-none focus:border-[hsl(var(--border-focus))]"
-                  >
-                    {voices.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} — {v.description.slice(0, 24)}
-                      </option>
-                    ))}
-                  </select>
+                <div className="mt-2.5 space-y-2">
+                  {/* 双人独立选角：两路音色互不干扰，单人模式沿用右侧音色库选择 */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="flex items-center space-x-2 text-xs">
+                      <span className="text-[hsl(var(--fg-muted))] shrink-0">Speaker 1</span>
+                      <select
+                        value={selectedVoice}
+                        onChange={(e) => setSelectedVoice(e.target.value)}
+                        disabled={isGenerating}
+                        className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))] text-[hsl(var(--fg-primary))] text-xs outline-none focus:border-[hsl(var(--border-focus))]"
+                      >
+                        {voices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} — {v.description.slice(0, 24)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center space-x-2 text-xs">
+                      <span className="text-[hsl(var(--fg-muted))] shrink-0">Speaker 2</span>
+                      <select
+                        value={secondVoice}
+                        onChange={(e) => setSecondVoice(e.target.value)}
+                        disabled={isGenerating}
+                        className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))] text-[hsl(var(--fg-primary))] text-xs outline-none focus:border-[hsl(var(--border-focus))]"
+                      >
+                        {voices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} — {v.description.slice(0, 24)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-[hsl(var(--fg-muted))]">
+                    剧本每行以 <code className="font-mono px-1 rounded bg-[hsl(var(--bg-subtle))]">Speaker 1:</code> /
+                    <code className="font-mono px-1 rounded bg-[hsl(var(--bg-subtle))]">Speaker 2:</code> 开头分角色，
+                    例：<code className="font-mono">Speaker 1: Hello!</code>
+                    <button
+                      type="button"
+                      onClick={applyDialogueTemplate}
+                      disabled={isGenerating}
+                      className="ml-1 underline hover:text-[hsl(var(--fg-primary))] cursor-pointer disabled:opacity-50"
+                    >
+                      填入对话示例
+                    </button>
+                  </p>
+                  {!dialogueLabeled && (
+                    <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                      当前剧本未检测到 Speaker 标记，生成时将自动降级为单人朗读。
+                    </p>
+                  )}
                 </div>
               )}
             </div>
+            )}
 
             {/* 监听与下载播放器（置于输入框下方，声波立即可见，完全免去翻页查找） */}
             <AudioPlayer
               audioUrl={audioUrl}
               audioBlob={audioBlob}
               modelName={selectedModel}
-              voiceName={isDialogue ? `${selectedVoice}+${secondVoice}` : selectedVoice}
+              voiceName={isDialogue && dialogueLabeled ? `${selectedVoice}+${secondVoice}` : selectedVoice}
               isGenerating={isGenerating}
               isStreaming={isStreaming}
               streamedSeconds={streamedSeconds}
               streamedChunks={streamedChunks}
+              note={streamNote}
               onCancel={cancelGeneration}
             />
           </div>
 
-          {/* 右侧设置区域：动态模型架构 + 精选音色库 (5 cols) */}
+          {/* 右侧设置区域：厂商切换 + 动态模型架构 + 精选音色库 (5 cols) */}
           <div className="lg:col-span-5 space-y-4">
+            {/* TTS 厂商切换 */}
+            <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-3 shadow-xs">
+              <div className="flex rounded-lg border border-[hsl(var(--border-subtle))] overflow-hidden text-xs">
+                {providers.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setProvider(p.id)}
+                    disabled={isGenerating}
+                    className={`flex-1 px-2 py-2 transition-colors cursor-pointer disabled:opacity-50 ${
+                      provider === p.id
+                        ? 'bg-[hsl(var(--accent))] text-[hsl(var(--accent-fg))] font-medium'
+                        : 'bg-[hsl(var(--bg-subtle))] text-[hsl(var(--fg-muted))] hover:text-[hsl(var(--fg-primary))]'
+                    }`}
+                  >
+                    {p.displayName}
+                  </button>
+                ))}
+              </div>
+              {!isGemini && (
+                <p className="mt-2 text-[11px] leading-relaxed text-[hsl(var(--fg-muted))]">
+                  Azure 按 SSE 单包下发（微软 REST 无真流式），前端同一套播放；F0 每月 50 万字符免费，Key 与区域必须同区。语言由音色决定，请在音色库用语言筛选；[laughs] 类表演标签会自动去掉不发音。
+                </p>
+              )}
+            </div>
+
             {/* 动态模型选择（自适应版本排序，支持 TTS / Live 分类） */}
             <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
               <ModelPicker
@@ -249,10 +336,13 @@ export function App() {
                 selectedVoice={selectedVoice}
                 onSelectVoice={setSelectedVoice}
                 isLoading={isLoadingVoices}
+                auditioningId={auditioningId}
+                onAudition={auditionVoice}
               />
             </div>
 
-            {/* 自定义音色工作室（设计 / 复刻 / 删除） */}
+            {/* 自定义音色工作室（设计 / 复刻 / 删除，仅 Gemini） */}
+            {isGemini && (
             <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
               <VoiceStudio
                 voices={voices}
@@ -262,9 +352,11 @@ export function App() {
                 isBusy={isManagingVoice}
                 onDesign={designVoice}
                 onReplicate={replicateVoice}
+                onPreviewSample={fetchVoiceSample}
                 onDelete={deleteVoice}
               />
             </div>
+            )}
           </div>
         </div>
       </main>
@@ -281,9 +373,15 @@ export function App() {
       <ApiKeyModal
         isOpen={isKeyModalOpen}
         onClose={() => setIsKeyModalOpen(false)}
+        provider={provider}
         apiKey={apiKey}
         onSaveKey={setApiKey}
         hasServerKey={hasServerKey}
+        azureKey={azureKey}
+        onSaveAzureKey={setAzureKey}
+        azureRegion={azureRegion}
+        onSaveAzureRegion={setAzureRegion}
+        azureServerKey={azureServerKey}
       />
     </div>
   );

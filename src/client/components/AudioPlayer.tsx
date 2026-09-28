@@ -11,6 +11,7 @@ interface AudioPlayerProps {
   isStreaming?: boolean;
   streamedSeconds?: number;
   streamedChunks?: number;
+  note?: string | null;
   onCancel?: () => void;
 }
 
@@ -23,6 +24,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   isStreaming = false,
   streamedSeconds = 0,
   streamedChunks = 0,
+  note = null,
   onCancel,
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -151,6 +153,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </span>
         )}
       </div>
+      {note && (
+        <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">{note}</p>
+      )}
 
       {/* Modern Waveform Visualizer Bar */}
       <div className="h-10 bg-[hsl(var(--bg-subtle))] rounded-lg flex items-center justify-between px-3 gap-1 overflow-hidden relative">
