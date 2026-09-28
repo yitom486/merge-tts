@@ -1,0 +1,444 @@
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { logger } from 'hono/logger';
+import { getProvider, listProviders, registerProvider, resolveProviderApiKey } from './providers';
+import { designVoice, replicateVoice, getVoiceDetail, deleteVoice } from './providers/gemini';
+import type { TTSProvider } from './providers/types';
+import type { TTSGenerateRequest } from './types';
+
+// ---- 对外重导出：别的项目挂载后可直接扩展 ----
+export { registerProvider, getProvider, listProviders };
+export { geminiProvider } from './providers/gemini';
+export { azureProvider } from './providers/azure';
+export type { TTSProvider } from './providers/types';
+export type { TTSGenerateRequest, ModelInfo, VoiceInfo, ModelCategory, ModelTier } from './types';
+
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://localhost:3001',
+];
+
+const BASE_ALLOW_HEADERS = [
+  'Content-Type',
+  'x-gemini-api-key',
+  // 通用多厂商 Key 头，新厂商直接用 x-{provider}-api-key 即可
+  'x-provider-api-key',
+  'x-openai-api-key',
+  'x-azure-api-key',
+  'x-azure-region',
+  'x-tts-provider',
+  'x-tts-region',
+  'x-alibaba-api-key',
+  'x-volcengine-api-key',
+  'x-minimax-api-key',
+  'x-elevenlabs-api-key',
+];
+
+export interface TTSAppOptions {
+  /** 路由前缀，默认 '/api'（挂载到别的项目时可改为 '/tts' 等） */
+  prefix?: string;
+  /** CORS 白名单，默认本地开发预设；传 false 关闭 CORS 中间件 */
+  corsOrigins?: string[] | false;
+  /** 追加允许的请求头（如自家 x-xxx-api-key） */
+  extraAllowHeaders?: string[];
+  /** 是否启用请求日志，默认 true */
+  enableLogger?: boolean;
+  /** 随应用一起注册的额外厂商（以后支持更多 TTS 时从这里插） */
+  extraProviders?: TTSProvider[];
+  /** 默认厂商（旧前端兼容），默认 'gemini' */
+  defaultProvider?: string;
+}
+
+function normalizePrefix(prefix?: string): string {
+  if (!prefix) return '/api';
+  let p = prefix.trim();
+  if (!p.startsWith('/')) p = `/${p}`;
+  return p.replace(/\/+$/, '') || '/api';
+}
+
+/**
+ * 创建 TTS 通用服务（纯函数，无副作用，可被别的项目直接挂载）：
+ * ```ts
+ * import { createTTSApp } from 'gemini-tts-studio/server';
+ * const app = createTTSApp({ prefix: '/tts', extraProviders: [myProvider] });
+ * app.use('/ui/*', serveStatic({ root: './dist' })); // 宿主自行决定
+ * export default { port: 3001, fetch: app.fetch };
+ * ```
+ */
+export function createTTSApp(options: TTSAppOptions = {}): Hono {
+  const base = normalizePrefix(options.prefix);
+  const defaultProvider = (options.defaultProvider || 'gemini').toLowerCase();
+
+  for (const p of options.extraProviders || []) {
+    registerProvider(p);
+  }
+
+  const app = new Hono();
+
+  // 中间件：日志与 CORS
+  if (options.enableLogger !== false) {
+    app.use('*', logger());
+  }
+  if (options.corsOrigins !== false) {
+    app.use(`${base}/*`, cors({
+      origin: options.corsOrigins || DEFAULT_CORS_ORIGINS,
+      allowHeaders: [...BASE_ALLOW_HEADERS, ...(options.extraAllowHeaders || [])],
+      exposeHeaders: ['Content-Type', 'Content-Disposition'],
+    }));
+  }
+
+  /** 从 query / body / header 解析 provider，缺省 defaultProvider */
+  function resolveProviderId(c: any, bodyProvider?: string): string {
+    const q = c.req.query('provider') || c.req.query('providerId');
+    return (bodyProvider || q || c.req.header('x-tts-provider') || defaultProvider).toLowerCase();
+  }
+
+  /** 按 provider 取 Key：优先 x-{provider}-api-key，兼容 x-provider-api-key 与 x-gemini-api-key */
+  function resolveKeyForProvider(c: any, providerId: string): string {
+    const specific = c.req.header(`x-${providerId}-api-key`);
+    const generic = c.req.header('x-provider-api-key');
+    const legacy = c.req.header('x-gemini-api-key');
+    return resolveProviderApiKey(providerId, specific, generic, legacy);
+  }
+
+  /** 按 provider 取 region：优先 body/query/header，默认走环境变量（见各 provider） */
+  function resolveRegionForProvider(c: any, bodyRegion?: string): string | undefined {
+    return (
+      bodyRegion ||
+      c.req.query('region') ||
+      c.req.header('x-azure-region') ||
+      c.req.header('x-tts-region') ||
+      undefined
+    );
+  }
+
+  /** 要求 gemini 的守卫：Voices 设计/复刻/查删目前仅 Gemini 支持 */
+  function requireGemini(c: any, providerId: string) {
+    if (providerId !== 'gemini') {
+      return c.json({ error: `该能力目前仅 gemini 支持（当前 provider=${providerId}）` }, 400);
+    }
+    return null;
+  }
+
+  /**
+   * GET {base}/health
+   * 健康检查与密钥状态探测（绝对不向客户端泄露 Key 内容）
+   */
+  app.get(`${base}/health`, (c) => {
+    const providersStatus: Record<string, boolean> = {};
+    for (const p of listProviders()) {
+      try {
+        providersStatus[p.id] = Boolean(getProvider(p.id).resolveApiKey?.(undefined));
+      } catch {
+        providersStatus[p.id] = false;
+      }
+    }
+    return c.json({
+      status: 'ok',
+      hasServerKey: Boolean(providersStatus[defaultProvider]),
+      providers: providersStatus,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  /**
+   * GET {base}/providers
+   * 通用挂件用：列出已注册的 TTS 厂商
+   */
+  app.get(`${base}/providers`, (c) => {
+    return c.json({ providers: listProviders() });
+  });
+
+  /**
+   * GET {base}/models?provider=gemini&region=eastus
+   * 动态拉取模型列表（坚决不硬编码，通过 Google 接口或动态元数据获取）
+   */
+  app.get(`${base}/models`, async (c) => {
+    const providerId = resolveProviderId(c);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch (e: any) {
+      return c.json({ error: e?.message }, 400);
+    }
+    const apiKey = resolveKeyForProvider(c, providerId);
+    const region = resolveRegionForProvider(c);
+
+    try {
+      const result = await provider.listModels(apiKey, region);
+      return c.json(result);
+    } catch (error: any) {
+      return c.json({ error: error?.message || '拉取模型列表失败' }, 500);
+    }
+  });
+
+  /**
+   * GET {base}/voices?provider=gemini&region=eastus
+   * 动态拉取可用声音列表
+   */
+  app.get(`${base}/voices`, async (c) => {
+    const providerId = resolveProviderId(c);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch (e: any) {
+      return c.json({ error: e?.message }, 400);
+    }
+    const apiKey = resolveKeyForProvider(c, providerId);
+    const region = resolveRegionForProvider(c);
+
+    try {
+      const voices = await provider.listVoices(apiKey, region);
+      return c.json({ voices });
+    } catch (error: any) {
+      return c.json({ error: error?.message || '获取声音列表失败' }, 500);
+    }
+  });
+
+  /**
+   * POST {base}/voices/design
+   * 自然语言设计音色：{ input, displayName?, gender?, languageCode?, regionCode?, model? }
+   * 返回 { id, displayName, sampleAudio: { data, mimeType } }，sampleAudio 可直接试听
+   */
+  app.post(`${base}/voices/design`, async (c) => {
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: '无效的 JSON 请求体' }, 400);
+    }
+    const providerId = resolveProviderId(c, body.provider);
+    const denied = requireGemini(c, providerId);
+    if (denied) return denied;
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) return c.json({ error: '缺少 Gemini API Key' }, 401);
+
+    try {
+      const result = await designVoice(apiKey, {
+        input: body.input || body.prompt || '',
+        displayName: body.displayName,
+        gender: body.gender,
+        languageCode: body.languageCode || body.region,
+        regionCode: body.regionCode,
+        model: body.model,
+      });
+      return c.json({
+        id: result.id,
+        key: result.key,
+        displayName: result.displayName,
+        sampleAudio: result.sampleAudioBase64
+          ? { data: result.sampleAudioBase64, mimeType: result.sampleMime }
+          : null,
+      });
+    } catch (error: any) {
+      return c.json({ error: error?.message || '设计音色失败' }, 500);
+    }
+  });
+
+  /**
+   * POST {base}/voices/replicate
+   * 声音复刻：{ displayName?, model?, store?, sourceAudio, sourceMime?, consentAudio, consentMime? }
+   * 音频为 base64（建议 24kHz 单声道 16-bit WAV；source 10–30s + 同一人授权声明朗读）
+   */
+  app.post(`${base}/voices/replicate`, async (c) => {
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: '无效的 JSON 请求体' }, 400);
+    }
+    const providerId = resolveProviderId(c, body.provider);
+    const denied = requireGemini(c, providerId);
+    if (denied) return denied;
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) return c.json({ error: '缺少 Gemini API Key' }, 401);
+
+    try {
+      const result = await replicateVoice(apiKey, {
+        displayName: body.displayName,
+        model: body.model,
+        store: body.store,
+        sourceAudioBase64: body.sourceAudio || body.source_audio,
+        sourceMime: body.sourceMime || body.source_mime,
+        consentAudioBase64: body.consentAudio || body.consent_audio,
+        consentMime: body.consentMime || body.consent_mime,
+      });
+      return c.json({ id: result.id, key: result.key, displayName: result.displayName });
+    } catch (error: any) {
+      return c.json({ error: error?.message || '复刻音色失败' }, 500);
+    }
+  });
+
+  /** GET {base}/voices/:id 自定义音色详情（含 prompted 试听 sample_audio） */
+  app.get(`${base}/voices/:id`, async (c) => {
+    const providerId = resolveProviderId(c);
+    const denied = requireGemini(c, providerId);
+    if (denied) return denied;
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) return c.json({ error: '缺少 Gemini API Key' }, 401);
+
+    try {
+      const detail = await getVoiceDetail(apiKey, c.req.param('id'));
+      const v = (detail as any)?.voice || detail;
+      const sample = v.sample_audio || v.sampleAudio || {};
+      return c.json({
+        id: v.id,
+        displayName: v.display_name || v.displayName,
+        type: v.type,
+        sampleAudio: sample.data ? { data: sample.data, mimeType: sample.mime_type || sample.mimeType } : null,
+        raw: detail,
+      });
+    } catch (error: any) {
+      return c.json({ error: error?.message || '获取音色详情失败' }, 500);
+    }
+  });
+
+  /** DELETE {base}/voices/:id 删除自定义音色 */
+  app.delete(`${base}/voices/:id`, async (c) => {
+    const providerId = resolveProviderId(c);
+    const denied = requireGemini(c, providerId);
+    if (denied) return denied;
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) return c.json({ error: '缺少 Gemini API Key' }, 401);
+
+    try {
+      return c.json(await deleteVoice(apiKey, c.req.param('id')));
+    } catch (error: any) {
+      return c.json({ error: error?.message || '删除音色失败' }, 500);
+    }
+  });
+
+  /**
+   * POST {base}/tts/generate
+   * 核心语音生成接口：返回纯二进制音频流
+   * 通用参数：{ provider='gemini', text, voiceName, model, speed, pitch, format, ... }
+   */
+  app.post(`${base}/tts/generate`, async (c) => {
+    let body: TTSGenerateRequest;
+    try {
+      body = await c.req.json<TTSGenerateRequest>();
+    } catch {
+      return c.json({ error: '无效的 JSON 请求体' }, 400);
+    }
+
+    const providerId = resolveProviderId(c, body.provider);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch (e: any) {
+      return c.json({ error: e?.message }, 400);
+    }
+
+    const apiKey = resolveKeyForProvider(c, providerId);
+
+    if (!apiKey) {
+      return c.json({
+        error: `缺少 ${provider.displayName} API Key。请在请求头 x-${providerId}-api-key 中传入，或在服务端 .env 中配置。`,
+      }, 401);
+    }
+
+    if (!body.text || body.text.trim().length === 0) {
+      return c.json({ error: '朗读文本不能为空' }, 400);
+    }
+
+    try {
+      const { audioBuffer, mimeType } = await provider.synthesize(
+        { ...body, provider: providerId, region: body.region || resolveRegionForProvider(c) },
+        apiKey
+      );
+
+      // 直接输出二进制音频流（HTTP 边界转为标准 Uint8Array，消除 Buffer 池化偏移与类型摩擦）
+      const audioBytes = new Uint8Array(audioBuffer.byteLength);
+      audioBytes.set(audioBuffer);
+      return new Response(new Blob([audioBytes], { type: mimeType }), {
+        status: 200,
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Disposition': `inline; filename="${providerId}-speech.${mimeType.includes('mp3') ? 'mp3' : 'wav'}"`,
+          'Content-Length': audioBuffer.length.toString(),
+          'Cache-Control': 'no-cache',
+        },
+      });
+    } catch (error: any) {
+      console.error('TTS 生成失败:', error);
+      return c.json({ error: error?.message || '生成音频失败' }, 500);
+    }
+  });
+
+  /**
+   * POST {base}/tts/stream (SSE)
+   * 流式语音生成：边生成边下发 base64 PCM 分片，前端可实时播放。
+   * 事件：data: {"audio":"...","mimeType":"..."} … 最后 data: {"done":true,"mimeType":"..."}
+   * 无 synthesizeStream 的厂商自动降级为一次性合成后单包下发。
+   */
+  app.post(`${base}/tts/stream`, async (c) => {
+    let body: TTSGenerateRequest;
+    try {
+      body = await c.req.json<TTSGenerateRequest>();
+    } catch {
+      return c.json({ error: '无效的 JSON 请求体' }, 400);
+    }
+
+    const providerId = resolveProviderId(c, body.provider);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch (e: any) {
+      return c.json({ error: e?.message }, 400);
+    }
+
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey) {
+      return c.json({
+        error: `缺少 ${provider.displayName} API Key。请在请求头 x-${providerId}-api-key 中传入，或在服务端 .env 中配置。`,
+      }, 401);
+    }
+
+    if (!body.text || body.text.trim().length === 0) {
+      return c.json({ error: '朗读文本不能为空' }, 400);
+    }
+
+    const params = { ...body, provider: providerId, region: body.region || resolveRegionForProvider(c) };
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (obj: unknown) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        };
+        try {
+          if (provider.synthesizeStream) {
+            const { mimeType } = await provider.synthesizeStream(params, apiKey, async (chunk) => {
+              send({ audio: chunk.audioBase64, mimeType: chunk.mimeType });
+            });
+            send({ done: true, mimeType });
+          } else {
+            // 降级：一次性合成后单包下发，前端同一套解析
+            const { audioBuffer, mimeType } = await provider.synthesize(params, apiKey);
+            send({ audio: audioBuffer.toString('base64'), mimeType });
+            send({ done: true, mimeType });
+          }
+        } catch (error: any) {
+          console.error('TTS 流式生成失败:', error);
+          send({ error: error?.message || '流式生成音频失败' });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  });
+
+  return app;
+}

@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Download, Volume2, RotateCcw } from 'lucide-react';
+import { Play, Pause, Download, Volume2, RotateCcw, Radio, X } from 'lucide-react';
 import { formatTime } from '../lib/utils';
 
 interface AudioPlayerProps {
@@ -7,6 +7,11 @@ interface AudioPlayerProps {
   audioBlob: Blob | null;
   modelName: string;
   voiceName: string;
+  isGenerating?: boolean;
+  isStreaming?: boolean;
+  streamedSeconds?: number;
+  streamedChunks?: number;
+  onCancel?: () => void;
 }
 
 export const AudioPlayer: React.FC<AudioPlayerProps> = ({
@@ -14,6 +19,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   audioBlob,
   modelName,
   voiceName,
+  isGenerating = false,
+  isStreaming = false,
+  streamedSeconds = 0,
+  streamedChunks = 0,
+  onCancel,
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -31,11 +41,33 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       <div className="rounded-xl border border-dashed border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-6 text-center">
         <div className="flex flex-col items-center justify-center space-y-2 text-[hsl(var(--fg-muted))]">
           <div className="w-9 h-9 rounded-full bg-[hsl(var(--bg-subtle))] flex items-center justify-center">
-            <Volume2 className="w-4 h-4 text-[hsl(var(--fg-muted))]" />
+            {isStreaming ? (
+              <Radio className="w-4 h-4 text-[hsl(var(--accent))] animate-pulse" />
+            ) : (
+              <Volume2 className="w-4 h-4 text-[hsl(var(--fg-muted))]" />
+            )}
           </div>
-          <p className="text-xs">
-            配置台词与音色后，点击下方「生成音频」，生成的录音棚高保真音频将在此实时播放与下载。
-          </p>
+          {isStreaming ? (
+            <>
+              <p className="text-xs font-medium text-[hsl(var(--fg-primary))]">
+                正在流式合成并实时播放…已接收 {streamedSeconds.toFixed(1)}s 音频（{streamedChunks} 片）
+              </p>
+              <p className="text-[11px]">首包即播，无需等待整段生成完成</p>
+              {onCancel && (
+                <button
+                  onClick={onCancel}
+                  className="mt-1 flex items-center space-x-1 px-2.5 py-1 rounded-md text-[11px] border border-[hsl(var(--border-subtle))] hover:bg-[hsl(var(--bg-hover))] text-[hsl(var(--fg-primary))] transition-colors cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                  <span>取消生成</span>
+                </button>
+              )}
+            </>
+          ) : (
+            <p className="text-xs">
+              配置台词与音色后，点击下方「生成音频」，生成的录音棚高保真音频将在此实时播放与下载。
+            </p>
+          )}
         </div>
       </div>
     );
@@ -111,6 +143,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         {fileSizeKb && (
           <span className="text-[11px] font-mono text-[hsl(var(--fg-muted))]">
             WAV • {fileSizeKb} KB
+          </span>
+        )}
+        {isStreaming && (
+          <span className="text-[11px] font-mono text-[hsl(var(--accent))] animate-pulse">
+            ● 流式接收 {streamedSeconds.toFixed(1)}s
           </span>
         )}
       </div>

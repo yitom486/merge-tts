@@ -9,8 +9,8 @@ interface VoicePickerProps {
   isLoading: boolean;
 }
 
-// 核心推荐声音优先排在顶部
-const PRIORITY_VOICES = ['Puck', 'Kore', 'Charon', 'Fenrir', 'Aoede', 'Leda', 'Orpheus', 'Zephyr'];
+// 核心推荐声音优先排在顶部（自定义音色由服务端排在列表最前，不在此列）
+const PRIORITY_VOICES = ['Puck', 'Kore', 'Charon', 'Zephyr', 'Aoede', 'Fenrir', 'Achernar', 'Algenib'];
 
 export const VoicePicker: React.FC<VoicePickerProps> = ({
   voices,
@@ -33,11 +33,14 @@ export const VoicePicker: React.FC<VoicePickerProps> = ({
   const isPreset = voices.some((v) => v.id === selectedVoice);
   const currentVoiceObj = voices.find((v) => v.id === selectedVoice);
 
-  // 排序与搜索过滤：核心预设声音在前，且支持快速检索
+  // 排序与搜索过滤：自定义音色置顶，其次核心预设，且支持快速检索
   const sortedAndFilteredVoices = useMemo(() => {
     let list = [...voices];
 
     list.sort((a, b) => {
+      const customA = a.kind && a.kind !== 'prebuilt' ? 0 : 1;
+      const customB = b.kind && b.kind !== 'prebuilt' ? 0 : 1;
+      if (customA !== customB) return customA - customB;
       const idxA = PRIORITY_VOICES.indexOf(a.id);
       const idxB = PRIORITY_VOICES.indexOf(b.id);
       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
@@ -221,13 +224,20 @@ export const VoicePicker: React.FC<VoicePickerProps> = ({
                     <span className="text-xs font-semibold text-[hsl(var(--fg-primary))] truncate mr-1">
                       {voice.name}
                     </span>
-                    {isSelected ? (
-                      <Check className="w-3.5 h-3.5 text-[hsl(var(--accent))] shrink-0" />
-                    ) : voice.gender ? (
-                      <span className="text-[10px] text-[hsl(var(--fg-muted))] capitalize font-mono shrink-0">
-                        {voice.gender === 'female' ? '女' : voice.gender === 'male' ? '男' : '中性'}
-                      </span>
-                    ) : null}
+                    <div className="flex items-center space-x-1 shrink-0">
+                      {voice.kind && voice.kind !== 'prebuilt' && (
+                        <span className="text-[9px] px-1 py-px rounded border border-[hsl(var(--tag-border))] bg-[hsl(var(--tag-bg))] text-[hsl(var(--tag-fg))]">
+                          {voice.kind === 'prompted' ? '设计' : voice.kind === 'replicated' ? '复刻' : '自定义'}
+                        </span>
+                      )}
+                      {isSelected ? (
+                        <Check className="w-3.5 h-3.5 text-[hsl(var(--accent))] shrink-0" />
+                      ) : voice.gender ? (
+                        <span className="text-[10px] text-[hsl(var(--fg-muted))] capitalize font-mono shrink-0">
+                          {voice.gender === 'female' ? '女' : voice.gender === 'male' ? '男' : '中性'}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
 
                   {voice.tone && (

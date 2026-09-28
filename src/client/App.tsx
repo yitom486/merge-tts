@@ -5,6 +5,7 @@ import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { Editor } from './components/Editor';
 import { VoicePicker } from './components/VoicePicker';
+import { VoiceStudio } from './components/VoiceStudio';
 import { ModelPicker } from './components/ModelPicker';
 import { StyleSelector } from './components/StyleSelector';
 import { AudioPlayer } from './components/AudioPlayer';
@@ -30,12 +31,26 @@ export function App() {
     setText,
     speechStyle,
     setSpeechStyle,
+    language,
+    setLanguage,
+    isDialogue,
+    setIsDialogue,
+    secondVoice,
+    setSecondVoice,
     isGenerating,
+    isStreaming,
+    streamedSeconds,
+    streamedChunks,
     audioUrl,
     audioBlob,
     error,
     clearError,
     generateAudio,
+    cancelGeneration,
+    isManagingVoice,
+    designVoice,
+    replicateVoice,
+    deleteVoice,
   } = useTTS();
 
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
@@ -134,12 +149,69 @@ export function App() {
             </div>
 
             {/* 演播风格调优 */}
-            <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
+            <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs space-y-3">
               <StyleSelector
                 style={speechStyle}
                 onChangeStyle={setSpeechStyle}
                 disabled={isGenerating}
               />
+              {/* 合成语言（官方 80+ locale，留空=自动） */}
+              <div className="flex items-center space-x-2 text-xs">
+                <span className="text-[hsl(var(--fg-muted))] shrink-0">合成语言</span>
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  disabled={isGenerating}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))] text-[hsl(var(--fg-primary))] text-xs outline-none focus:border-[hsl(var(--border-focus))] disabled:opacity-50"
+                >
+                  <option value="">自动（跟随文本）</option>
+                  <option value="cmn-cn">简体中文（cmn-cn）</option>
+                  <option value="cmn-tw">繁體中文（cmn-tw）</option>
+                  <option value="en-us">English (US)</option>
+                  <option value="en-gb">English (UK)</option>
+                  <option value="ja-jp">日本語</option>
+                  <option value="ko-kr">한국어</option>
+                  <option value="fr-fr">Français</option>
+                  <option value="de-de">Deutsch</option>
+                  <option value="es-es">Español</option>
+                  <option value="it-it">Italiano</option>
+                  <option value="pt-br">Português (BR)</option>
+                  <option value="ru-ru">Русский</option>
+                  <option value="ar-001">العربية</option>
+                </select>
+              </div>
+            </div>
+
+            {/* 双人对话模式（官方 multi-speaker）：剧本用 Speaker 1: / Speaker 2: 开头分角色 */}
+            <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
+              <label className="flex items-center space-x-2 text-xs cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isDialogue}
+                  onChange={(e) => setIsDialogue(e.target.checked)}
+                  disabled={isGenerating}
+                  className="w-3.5 h-3.5 accent-[hsl(var(--accent))]"
+                />
+                <span className="font-medium text-[hsl(var(--fg-primary))]">双人对话模式</span>
+                <span className="text-[11px] text-[hsl(var(--fg-muted))]">Speaker 1 用主音色，Speaker 2 用下方音色</span>
+              </label>
+              {isDialogue && (
+                <div className="mt-2.5 flex items-center space-x-2 text-xs">
+                  <span className="text-[hsl(var(--fg-muted))] shrink-0">Speaker 2 音色</span>
+                  <select
+                    value={secondVoice}
+                    onChange={(e) => setSecondVoice(e.target.value)}
+                    disabled={isGenerating}
+                    className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-subtle))] text-[hsl(var(--fg-primary))] text-xs outline-none focus:border-[hsl(var(--border-focus))]"
+                  >
+                    {voices.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} — {v.description.slice(0, 24)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             {/* 监听与下载播放器（置于输入框下方，声波立即可见，完全免去翻页查找） */}
@@ -147,7 +219,12 @@ export function App() {
               audioUrl={audioUrl}
               audioBlob={audioBlob}
               modelName={selectedModel}
-              voiceName={selectedVoice}
+              voiceName={isDialogue ? `${selectedVoice}+${secondVoice}` : selectedVoice}
+              isGenerating={isGenerating}
+              isStreaming={isStreaming}
+              streamedSeconds={streamedSeconds}
+              streamedChunks={streamedChunks}
+              onCancel={cancelGeneration}
             />
           </div>
 
@@ -172,6 +249,20 @@ export function App() {
                 selectedVoice={selectedVoice}
                 onSelectVoice={setSelectedVoice}
                 isLoading={isLoadingVoices}
+              />
+            </div>
+
+            {/* 自定义音色工作室（设计 / 复刻 / 删除） */}
+            <div className="rounded-xl border border-[hsl(var(--border-subtle))] bg-[hsl(var(--bg-card))] p-4 shadow-xs">
+              <VoiceStudio
+                voices={voices}
+                selectedVoice={selectedVoice}
+                onSelectVoice={setSelectedVoice}
+                disabled={isGenerating}
+                isBusy={isManagingVoice}
+                onDesign={designVoice}
+                onReplicate={replicateVoice}
+                onDelete={deleteVoice}
               />
             </div>
           </div>
