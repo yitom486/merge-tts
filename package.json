@@ -1,6 +1,6 @@
 {
   "name": "gemini-tts-studio",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "通用 TTS 服务：Gemini / Azure 语音合成、流式输出与自定义音色，Hono 中间件式挂载",
   "exports": {
