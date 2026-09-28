@@ -1,0 +1,11 @@
+name: CI Probe
+
+on:
+  push:
+    branches: [merge-tts]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo probe-ok
