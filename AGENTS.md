@@ -165,6 +165,9 @@ d:/project/js/tts/gemini/
   * 100% 来自官方 Voices/ListVoices 实时响应（含自定义设计/复刻音色），无任何本地预置兜底。
 * `GET /api/health`:
   * 健康检查与当前 API Key 就绪状态（仅返回布尔值 `hasKey: boolean`，不返回 Key 内容）。
+* `POST /api/tts/unified`:
+  * 统一合成（嵌入调用方）：输入文本/语种/用途/语音偏好/首选服务/凭证，包内解析模型与音色、设置超时取消；成功 200（含 `usedFallback`），双失败 500（含两次原因），缺参 400；失败只兜底本地 TTS。
+* 发布入口：`gemini-tts-studio/server`（`createTTSApp` 等）与 `gemini-tts-studio/client`（`VoiceSettings` + `style.css` + 无头客户端）。
 
 ---
 

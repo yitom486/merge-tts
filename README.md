@@ -1,9 +1,11 @@
 # Merge TTS · 通用语音合成服务与工作台
 
-基于 **Bun + Hono + React** 的多厂商 TTS 服务：Google Gemini（流式/双人/自定义音色）、Azure Speech，以及本地 OpenAI 兼容 TTS 服务（例如 Piper/Kokoro），附带一个录音棚风格的 Web 工作台。
+基于 **Bun + Hono + React** 的多厂商 TTS 服务：Google Gemini、Azure Speech、本地 OpenAI 兼容 TTS，附带一个录音棚风格的 Web 工作台。
 
 - 后端可独立部署，也可作为 npm 包（`gemini-tts-studio/server`）被其他项目直接挂载。
+- **统一合成接口** `POST /api/tts/unified`：调用方只给文本/语种/用途/语音偏好/首选服务/凭证，模型与音色解析、超时取消、失败兜底全部由包负责。
 - 新增 TTS 厂商只需实现 `TTSProvider` 接口并注册一行，无需改路由与前端。
+- 可发布的客户端入口 `gemini-tts-studio/client`：无头 API 客户端 + `VoiceSettings` 音色设置组件 + 自带样式。
 
 ## 快速开始
 
@@ -107,6 +109,54 @@ POST /api/tts/stream
 
 双人对话规则：剧本每行以 `Speaker 1:` / `Speaker 2:` 开头；未检测到双方标记时自动降级单人。`voice_` / `voicekey_` 开头的自定义音色 ID 可直接填入 `voiceName`。
 
+### 统一合成（嵌入调用方，如 Lingua Studio）
+
+调用方**无需填写任何厂商默认模型/音色**，最小请求只需文本：
+
+```bash
+POST /api/tts/unified
+Content-Type: application/json
+x-gemini-api-key: <key>                # 凭证也可在 body.credentials 里按厂商分别给
+
+{
+  "text": "床前明月光，疑是地上霜。",
+  "language": "zh-CN",
+  "purpose": "narration",
+  "voicePreference": { "gender": "female" },
+  "preferredService": "gemini",
+  "timeoutMs": 120000,
+  "credentials": { "geminiApiKey": "<key>" }
+}
+```
+
+成功一律 `200` JSON（`usedFallback` 标记是否走过本地兜底）：
+
+```json
+{
+  "ok": true,
+  "audioBase64": "…",
+  "mimeType": "audio/wav",
+  "provider": "local",
+  "voice": "local-voice",
+  "model": "local-1",
+  "usedFallback": true,
+  "preferredError": { "provider": "gemini", "message": "…" },
+  "warnings": ["无female音色，已选用现有音色"]
+}
+```
+
+失败规则（全部显式，无静默）：首选失败**只兜底到本地 TTS**，绝不碰浏览器语音或另一个云服务；本地成功则带 `usedFallback: true` + 首选的安全错误信息供调用方明示用户；本地也失败则 `500` 返回**两次失败原因**：
+
+```json
+{
+  "ok": false,
+  "preferredError": { "provider": "gemini", "message": "…" },
+  "fallbackError": { "provider": "local", "message": "…" }
+}
+```
+
+缺参（空文本、未知厂商）返回 `400` 同构错误体。超时（默认 120s，可配）与调用方取消（`signal` / HTTP 断开）会立即拒绝等待中的调用。
+
 ### 自定义音色（仅 Gemini）
 
 ```bash
@@ -162,6 +212,36 @@ const myProvider: TTSProvider = {
 };
 ```
 
+### 客户端入口（音色设置界面）
+
+```bash
+npm i gemini-tts-studio
+```
+
+```tsx
+import 'gemini-tts-studio/client/style.css';
+import { VoiceSettings, createTTSClient } from 'gemini-tts-studio/client';
+
+function Panel() {
+  const [voice, setVoice] = useState('');
+  return (
+    <VoiceSettings
+      baseUrl=""                       // 同源留空；跨域填网关地址
+      headers={{ 'x-gemini-api-key': key }}
+      value={voice}
+      onChange={(id) => setVoice(id)}  // 厂商页签 + 搜索 + 试听 + 自定义 ID 自带
+    />
+  );
+}
+
+// 无头调用（宿主自渲染 UI 时用）
+const client = createTTSClient({ baseUrl: '', headers: { 'x-gemini-api-key': key } });
+const result = await client.synthesizeUnified({ text: '你好', language: 'zh-CN', preferredService: 'gemini' });
+// result.usedFallback / result.preferredError / result.warnings 按统一约定返回
+```
+
+`VoiceSettings` 的试听走统一合成（`previewText` 可配，默认中英短句）。样式自包含：导出的 `style.css` 已含主题变量与用到的工具类，宿主无需配置 Tailwind； React ≥18、`lucide-react` 为 peer 依赖。
+
 ## 厂商差异速览
 
 | | Gemini | Azure | Local |
@@ -180,6 +260,10 @@ const myProvider: TTSProvider = {
 
 现有 `gemini-tts-studio/server` 导出及 Gemini/Azure 路由保持可用。新增 `local` provider、请求体 `apiKey` / `endpoint` / Azure `style`、Azure 音色 `locale` / `styles`，合成与发现错误增加 `code` 和 `retryable` 字段。请继续读取 `error` 字段向用户展示；Gemini 的模型和音色仍需先动态发现并在合成请求中明确传入。
 
+### 0.2.0 → 0.3.0
+
+新增统一合成 `POST /api/tts/unified`（请求/成功/失败稳定类型见上，失败只兜底本地，`usedFallback` + 双原因显式返回）与客户端入口 `gemini-tts-studio/client`（`VoiceSettings` 组件 + `style.css` + 无头 `createTTSClient`）。旧路由与 `/server` 导出保持兼容。
+
 ## 许可证
 
 MIT，见 [LICENSE](./LICENSE)。
@@ -191,7 +275,10 @@ src/server/
 ├── app.ts            # createTTSApp 工厂（可发布，无副作用）
 ├── index.ts          # 独立部署入口（/api + 前端静态托管）
 ├── types.ts          # 通用类型
-└── providers/        # gemini.ts / azure.ts / registry(index.ts) / types.ts
+├── unified.ts        # 统一合成（模型/音色解析、本地兜底、超时取消）
+├── unified.test.ts   # 统一合成测试（bun:test）
+└── providers/        # gemini.ts / azure.ts / local.ts / registry(index.ts) / types.ts
 src/client/            # React 工作台（暂不进包）
+src/client-lib/        # 可发布客户端：api.ts / VoiceSettings.tsx / client.css
 scripts/build-lib.ts   # lib 打包脚本
 ```

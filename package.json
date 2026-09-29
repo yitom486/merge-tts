@@ -1,6 +1,6 @@
 {
   "name": "gemini-tts-studio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "通用 TTS 服务：Gemini / Azure / 本地 OpenAI 兼容语音合成，Hono 中间件式挂载",
   "license": "MIT",
@@ -9,6 +9,11 @@
       "types": "./lib/server/app.d.ts",
       "default": "./lib/server/app.js"
     },
+    "./client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client/index.js"
+    },
+    "./client/style.css": "./lib/client/style.css",
     "./package.json": "./package.json"
   },
   "files": [
@@ -36,7 +41,13 @@
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.0.2"
   },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18",
+    "lucide-react": ">=1"
+  },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
     "@tailwindcss/vite": "^4.1.1",
     "@types/bun": "latest",
     "@types/node": "^22.13.9",

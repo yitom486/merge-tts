@@ -6,6 +6,8 @@ import { designVoice, replicateVoice, getVoiceDetail, deleteVoice } from './prov
 import { localProvider, createLocalTTSProvider, LocalTTSError } from './providers/local';
 import type { TTSProvider } from './providers/types';
 import type { TTSGenerateRequest } from './types';
+import { synthesizeUnified, UnifiedSynthesisError } from './unified';
+import type { UnifiedSynthesizeRequest } from './unified';
 
 // ---- 对外重导出：别的项目挂载后可直接扩展 ----
 export { registerProvider, getProvider, listProviders };
@@ -15,6 +17,11 @@ export { localProvider, createLocalTTSProvider, LocalTTSError } from './provider
 export type { LocalTTSOptions } from './providers/local';
 export type { TTSProvider } from './providers/types';
 export type { TTSGenerateRequest, ModelInfo, VoiceInfo, ModelCategory, ModelTier } from './types';
+export { synthesizeUnified, UnifiedSynthesisError } from './unified';
+export type {
+  UnifiedSynthesizeRequest, UnifiedSynthesizeSuccess, UnifiedSynthesizeFailure,
+  UnifiedVoicePreference, UnifiedCredentials, ServiceErrorInfo,
+} from './unified';
 
 const DEFAULT_CORS_ORIGINS = [
   'http://localhost:5173',
@@ -537,6 +544,47 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
         'X-Accel-Buffering': 'no',
       },
     });
+  });
+
+  /**
+   * POST {base}/tts/unified
+   * 统一合成（给嵌入调用方如 Lingua Studio）：
+   * 输入文本/语种/用途/语音偏好/首选服务/凭证，包内解析模型与音色并合成。
+   * 成功一律 200 JSON（含 usedFallback）；双失败 500 JSON（含两次原因）；缺参 400。
+   * 失败规则：首选失败只兜底到本地 TTS，绝不兜底到浏览器语音或另一个云服务。
+   */
+  app.post(`${base}/tts/unified`, async (c) => {
+    let body: UnifiedSynthesizeRequest;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({
+        ok: false,
+        preferredError: { provider: 'unknown', message: '无效的 JSON 请求体' },
+        fallbackError: null,
+      }, 400);
+    }
+    try {
+      const result = await synthesizeUnified(body, {
+        headers: {
+          'x-gemini-api-key': c.req.header('x-gemini-api-key'),
+          'x-azure-api-key': c.req.header('x-azure-api-key'),
+          'x-azure-region': c.req.header('x-azure-region'),
+          'x-local-api-key': c.req.header('x-local-api-key'),
+        },
+        signal: c.req.raw.signal,
+      });
+      return c.json(result);
+    } catch (error: unknown) {
+      if (error instanceof UnifiedSynthesisError) {
+        return c.json(error.failure, error.status);
+      }
+      return c.json({
+        ok: false,
+        preferredError: { provider: 'unknown', message: '统一合成失败，请检查服务配置' },
+        fallbackError: null,
+      }, 500);
+    }
   });
 
   return app;
