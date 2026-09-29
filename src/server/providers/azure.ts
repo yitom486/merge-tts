@@ -1,5 +1,6 @@
 import type { ModelInfo, TTSGenerateRequest, VoiceInfo } from '../types';
 import type { TTSProvider } from './types';
+import { LocalTTSError } from './local';
 
 export function resolveAzureApiKey(headerKey?: string): string {
   if (headerKey && headerKey.trim() !== '') return headerKey.trim();
@@ -50,7 +51,7 @@ function toPercent(v?: number): string | null {
   return `${pct > 0 ? '+' : ''}${pct}%`;
 }
 
-export function buildAzureSSML(text: string, voiceName: string, opts?: { speed?: number; pitch?: number; languageCode?: string }): string {
+export function buildAzureSSML(text: string, voiceName: string, opts?: { speed?: number; pitch?: number; languageCode?: string; style?: string }): string {
   const locale = localeFromVoice(voiceName, opts?.languageCode);
   const rate = toPercent(opts?.speed);
   const pitch = toPercent(opts?.pitch);
@@ -58,7 +59,8 @@ export function buildAzureSSML(text: string, voiceName: string, opts?: { speed?:
   const inner = rate || pitch
     ? `<prosody${rate ? ` rate="${rate}"` : ''}${pitch ? ` pitch="${pitch}"` : ''}>${safeText}</prosody>`
     : safeText;
-  return `<speak version="1.0" xml:lang="${locale}"><voice xml:lang="${locale}" name="${voiceName}">${inner}</voice></speak>`;
+  const styled = opts?.style ? `<mstts:express-as style="${escapeXml(opts.style)}">${inner}</mstts:express-as>` : inner;
+  return `<speak version="1.0" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="${locale}"><voice xml:lang="${locale}" name="${escapeXml(voiceName)}">${styled}</voice></speak>`;
 }
 
 function outputFormatFor(format?: string): { header: string; mimeType: string; ext: string } {
@@ -83,9 +85,10 @@ interface AzureVoiceItem {
   LocaleName?: string;
   VoiceType?: string;
   Status?: string;
+  StyleList?: string[];
 }
 
-export async function listAzureVoices(apiKey?: string, region?: string): Promise<VoiceInfo[]> {
+export async function listAzureVoices(apiKey?: string, region?: string, context?: { signal?: AbortSignal }): Promise<VoiceInfo[]> {
   const key = apiKey || resolveAzureApiKey();
   if (!key) {
     throw new Error('缺少 Azure Speech Key，无法拉取声音列表。请在前端设置中填入或在服务端配置 AZURE_SPEECH_KEY。');
@@ -96,6 +99,7 @@ export async function listAzureVoices(apiKey?: string, region?: string): Promise
   try {
     res = await fetch(`https://${reg}.tts.speech.microsoft.com/cognitiveservices/voices/list`, {
       headers: { 'Ocp-Apim-Subscription-Key': key },
+      signal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
     });
   } catch (err: any) {
     throw new Error(`拉取 Azure 声音列表网络失败：${err?.message || err}`);
@@ -118,6 +122,8 @@ export async function listAzureVoices(apiKey?: string, region?: string): Promise
       gender: genderFromAzure(v.Gender),
       tone: v.VoiceType,
       provider: 'azure',
+      ...(v.Locale ? { locale: v.Locale } : {}),
+      ...(Array.isArray(v.StyleList) ? { styles: v.StyleList } : {}),
     }));
 
   if (mapped.length === 0) {
@@ -138,7 +144,8 @@ export function stripPerformanceTags(text: string): string {
 export async function synthesizeAzure(
   params: TTSGenerateRequest,
   apiKey: string,
-  explicitRegion?: string
+  explicitRegion?: string,
+  context?: { signal?: AbortSignal }
 ): Promise<{ audioBuffer: Buffer; mimeType: string }> {
   const key = apiKey || resolveAzureApiKey();
   if (!key) {
@@ -151,10 +158,19 @@ export async function synthesizeAzure(
   }
   const { header, mimeType } = outputFormatFor(params.format);
 
+  const style = params.style?.trim();
+  if (style) {
+    const voices = await listAzureVoices(key, region, context);
+    const selected = voices.find(v => v.id === voiceName);
+    if (!selected) throw new LocalTTSError('E_AZURE_VOICE', '所选 Azure 音色不在当前区域的声音列表中。', 400);
+    if (!selected.styles?.includes(style)) throw new LocalTTSError('E_AZURE_STYLE', `音色 ${voiceName} 不支持风格 ${style}。`, 400);
+  }
+
   const ssml = buildAzureSSML(stripPerformanceTags(params.text), voiceName, {
     speed: params.speed,
     pitch: params.pitch,
     languageCode: params.languageCode,
+    style,
   });
 
   const res = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
@@ -166,6 +182,7 @@ export async function synthesizeAzure(
       'User-Agent': 'merge-tts-widget',
     },
     body: ssml,
+    signal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
   });
 
   if (!res.ok) {
@@ -188,5 +205,5 @@ export const azureProvider: TTSProvider = {
   resolveApiKey: resolveAzureApiKey,
   listModels: (_apiKey?: string) => listAzureModels(),
   listVoices: (apiKey?: string, region?: string) => listAzureVoices(apiKey, region),
-  synthesize: (params: TTSGenerateRequest, apiKey: string) => synthesizeAzure(params, apiKey),
+  synthesize: (params: TTSGenerateRequest, apiKey: string, context?: { signal?: AbortSignal }) => synthesizeAzure(params, apiKey, undefined, context),
 };

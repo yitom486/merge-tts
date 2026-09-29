@@ -475,7 +475,8 @@ function buildSdkContents(params: TTSGenerateRequest): any {
  */
 export async function generateTTSAudio(
   params: TTSGenerateRequest,
-  apiKey: string
+  apiKey: string,
+  context?: { signal?: AbortSignal }
 ): Promise<{ audioBuffer: Buffer; mimeType: string }> {
   if (!apiKey) {
     throw new Error('未检测到 Gemini API Key。请在前端设置中填入或在服务端配置 GEMINI_API_KEY。');
@@ -493,6 +494,7 @@ export async function generateTTSAudio(
     config: {
       responseModalities: ['AUDIO'],
       speechConfig: buildSpeechConfig(params),
+      abortSignal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
     },
   });
 
@@ -517,7 +519,8 @@ export async function generateTTSAudio(
 export async function synthesizeGeminiStream(
   params: TTSGenerateRequest,
   apiKey: string,
-  onChunk: (chunk: { audioBase64: string; mimeType: string }) => void | Promise<void>
+  onChunk: (chunk: { audioBase64: string; mimeType: string }) => void | Promise<void>,
+  context?: { signal?: AbortSignal }
 ): Promise<{ mimeType: string }> {
   if (!apiKey) {
     throw new Error('未检测到 Gemini API Key。请在前端设置中填入或在服务端配置 GEMINI_API_KEY。');
@@ -534,6 +537,7 @@ export async function synthesizeGeminiStream(
     config: {
       responseModalities: ['AUDIO'],
       speechConfig: buildSpeechConfig(params),
+      abortSignal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
     },
   });
 

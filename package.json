@@ -1,8 +1,8 @@
 {
   "name": "gemini-tts-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "通用 TTS 服务：Gemini / Azure 语音合成、流式输出与自定义音色，Hono 中间件式挂载",
+  "description": "通用 TTS 服务：Gemini / Azure / 本地 OpenAI 兼容语音合成，Hono 中间件式挂载",
   "license": "MIT",
   "exports": {
     "./server": {
@@ -21,6 +21,8 @@
     "dev:all": "concurrently \"bun run dev:server\" \"bun run dev:client\"",
     "build": "vite build",
     "build:lib": "bun scripts/build-lib.ts",
+    "test": "bun test tests",
+    "typecheck": "bunx tsc --noEmit",
     "prepublishOnly": "bun run build:lib",
     "preview": "vite preview",
     "start": "bun src/server/index.ts"

@@ -9,6 +9,8 @@ export interface TTSProvider {
   /** 唯一标识，如 'gemini' | 'azure' | 'alibaba' | 'volcengine' | 'openai' */
   id: string;
   displayName: string;
+  /** Local providers can be called without a key. */
+  requiresApiKey?: boolean;
 
   listModels(apiKey?: string, region?: string): Promise<{ models: ModelInfo[]; source: 'remote' | 'fallback' }>;
   listVoices(apiKey?: string, region?: string): Promise<VoiceInfo[]>;
@@ -16,7 +18,8 @@ export interface TTSProvider {
   getModelDetail?(apiKey: string, modelId: string): Promise<ModelInfo>;
   synthesize(
     params: TTSGenerateRequest,
-    apiKey: string
+    apiKey: string,
+    context?: { signal?: AbortSignal }
   ): Promise<{ audioBuffer: Buffer; mimeType: string }>;
 
   /**
@@ -26,7 +29,8 @@ export interface TTSProvider {
   synthesizeStream?: (
     params: TTSGenerateRequest,
     apiKey: string,
-    onChunk: (chunk: { audioBase64: string; mimeType: string }) => void | Promise<void>
+    onChunk: (chunk: { audioBase64: string; mimeType: string }) => void | Promise<void>,
+    context?: { signal?: AbortSignal }
   ) => Promise<{ mimeType: string }>;
 
   /** 各家 Key 解析规则，默认读 `x-{id}-api-key` + 同名环境变量 */

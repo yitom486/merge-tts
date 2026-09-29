@@ -1,6 +1,7 @@
 import type { TTSProvider } from './types';
 import { geminiProvider, resolveGeminiApiKey } from './gemini';
 import { azureProvider } from './azure';
+import { localProvider } from './local';
 
 const registry = new Map<string, TTSProvider>();
 
@@ -45,6 +46,7 @@ export function resolveProviderApiKey(providerId: string, ...headerKeys: Array<s
 // 内置注册
 registerProvider(geminiProvider);
 registerProvider(azureProvider);
+registerProvider(localProvider);
 
 // 兼容旧 import 路径：让 tts-service.ts 可以薄转发
 export { resolveGeminiApiKey };

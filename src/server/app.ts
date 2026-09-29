@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { getProvider, listProviders, registerProvider, resolveProviderApiKey } from './providers';
 import { designVoice, replicateVoice, getVoiceDetail, deleteVoice } from './providers/gemini';
+import { localProvider, createLocalTTSProvider, LocalTTSError } from './providers/local';
 import type { TTSProvider } from './providers/types';
 import type { TTSGenerateRequest } from './types';
 
@@ -10,6 +11,8 @@ import type { TTSGenerateRequest } from './types';
 export { registerProvider, getProvider, listProviders };
 export { geminiProvider } from './providers/gemini';
 export { azureProvider } from './providers/azure';
+export { localProvider, createLocalTTSProvider, LocalTTSError } from './providers/local';
+export type { LocalTTSOptions } from './providers/local';
 export type { TTSProvider } from './providers/types';
 export type { TTSGenerateRequest, ModelInfo, VoiceInfo, ModelCategory, ModelTier } from './types';
 
@@ -30,6 +33,7 @@ const BASE_ALLOW_HEADERS = [
   'x-azure-region',
   'x-tts-provider',
   'x-tts-region',
+  'x-local-api-key',
   'x-alibaba-api-key',
   'x-volcengine-api-key',
   'x-minimax-api-key',
@@ -83,6 +87,38 @@ export function prettyApiError(raw: string): string {
   return current.length > 500 ? `${current.slice(0, 500)}…` : current;
 }
 
+/** Validate untrusted JSON before it reaches a provider. */
+export function parseGenerateRequest(value: unknown): TTSGenerateRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new LocalTTSError('E_TTS_INPUT', '请求体必须是 JSON 对象。', 400);
+  const body = value as Record<string, unknown>;
+  if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 20000) throw new LocalTTSError('E_TTS_TEXT', '朗读文本不能为空，且不能超过 20000 个字符。', 400);
+  if (typeof body.voiceName !== 'string' || !body.voiceName.trim() || body.voiceName.length > 200) throw new LocalTTSError('E_TTS_VOICE', '请指定有效的音色 voiceName。', 400);
+  for (const field of ['provider', 'model', 'endpoint', 'apiKey', 'format', 'region', 'languageCode', 'speechMetadata', 'style'] as const) {
+    if (body[field] !== undefined && typeof body[field] !== 'string') throw new LocalTTSError('E_TTS_INPUT', `字段 ${field} 必须是字符串。`, 400);
+  }
+  if (body.speed !== undefined && (typeof body.speed !== 'number' || !Number.isFinite(body.speed) || body.speed < 0.25 || body.speed > 4)) {
+    throw new LocalTTSError('E_TTS_SPEED', '语速 speed 必须在 0.25 到 4 之间。', 400);
+  }
+  if (body.pitch !== undefined && (typeof body.pitch !== 'number' || !Number.isFinite(body.pitch))) throw new LocalTTSError('E_TTS_INPUT', '字段 pitch 必须是数字。', 400);
+  return body as unknown as TTSGenerateRequest;
+}
+
+function synthesisErrorResponse(error: unknown): Response {
+  if (error instanceof LocalTTSError) {
+    return Response.json({ error: error.message, code: error.code, retryable: error.retryable }, { status: error.status });
+  }
+  return Response.json({ error: '语音生成失败，请稍后重试或检查服务配置。', code: 'E_TTS_UPSTREAM', retryable: true }, { status: 502 });
+}
+
+function audioExtension(mimeType: string): string {
+  if (mimeType.includes('mpeg')) return 'mp3';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('pcm') || mimeType.includes('l16')) return 'pcm';
+  if (mimeType.includes('flac')) return 'flac';
+  if (mimeType.includes('aac')) return 'aac';
+  return 'wav';
+}
+
 /**
  * 创建 TTS 通用服务（纯函数，无副作用，可被别的项目直接挂载）：
  * ```ts
@@ -121,11 +157,12 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
   }
 
   /** 按 provider 取 Key：优先 x-{provider}-api-key，兼容 x-provider-api-key 与 x-gemini-api-key */
-  function resolveKeyForProvider(c: any, providerId: string): string {
+  function resolveKeyForProvider(c: any, providerId: string, bodyKey?: string): string {
+    if (bodyKey?.trim()) return bodyKey.trim();
     const specific = c.req.header(`x-${providerId}-api-key`);
     const generic = c.req.header('x-provider-api-key');
     const legacy = c.req.header('x-gemini-api-key');
-    return resolveProviderApiKey(providerId, specific, generic, legacy);
+    return resolveProviderApiKey(providerId, specific, generic, providerId === 'gemini' ? legacy : undefined);
   }
 
   /** 按 provider 取 region：优先 body/query/header，默认走环境变量（见各 provider） */
@@ -185,20 +222,20 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
     let provider;
     try {
       provider = getProvider(providerId);
-    } catch (e: any) {
-      return c.json({ error: e?.message }, 400);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
     }
     const apiKey = resolveKeyForProvider(c, providerId);
-    if (!apiKey) {
-      return c.json({ error: `缺少 ${provider.displayName} API Key，无法拉取模型列表` }, 401);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key，无法拉取模型列表。`, 401));
     }
-    const region = resolveRegionForProvider(c);
+    const region = providerId === 'local' ? c.req.query('endpoint') : resolveRegionForProvider(c);
 
     try {
       const result = await provider.listModels(apiKey, region);
       return c.json(result);
-    } catch (error: any) {
-      return c.json({ error: error?.message || '拉取模型列表失败' }, 500);
+    } catch (error: unknown) {
+      return synthesisErrorResponse(error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_DISCOVERY', '拉取模型列表失败，请检查服务配置。', 502, true));
     }
   });
 
@@ -208,20 +245,20 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
     let provider;
     try {
       provider = getProvider(providerId);
-    } catch (e: any) {
-      return c.json({ error: e?.message }, 400);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
     }
     if (!provider.getModelDetail) {
-      return c.json({ error: `该厂商暂不支持模型详情（provider=${providerId}）` }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_UNSUPPORTED', `该厂商暂不支持模型详情（provider=${providerId}）。`, 400));
     }
     const apiKey = resolveKeyForProvider(c, providerId);
-    if (!apiKey) {
-      return c.json({ error: `缺少 ${provider.displayName} API Key，无法拉取模型详情` }, 401);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key，无法拉取模型详情。`, 401));
     }
     try {
       return c.json({ model: await provider.getModelDetail(apiKey, c.req.param('id')) });
-    } catch (error: any) {
-      return c.json({ error: error?.message || '拉取模型详情失败' }, 500);
+    } catch (error: unknown) {
+      return synthesisErrorResponse(error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_DISCOVERY', '拉取模型详情失败，请检查服务配置。', 502, true));
     }
   });
 
@@ -234,20 +271,20 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
     let provider;
     try {
       provider = getProvider(providerId);
-    } catch (e: any) {
-      return c.json({ error: e?.message }, 400);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
     }
     const apiKey = resolveKeyForProvider(c, providerId);
-    if (!apiKey) {
-      return c.json({ error: `缺少 ${provider.displayName} API Key，无法拉取声音列表` }, 401);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key，无法拉取声音列表。`, 401));
     }
-    const region = resolveRegionForProvider(c);
+    const region = providerId === 'local' ? c.req.query('endpoint') : resolveRegionForProvider(c);
 
     try {
       const voices = await provider.listVoices(apiKey, region);
       return c.json({ voices });
-    } catch (error: any) {
-      return c.json({ error: error?.message || '获取声音列表失败' }, 500);
+    } catch (error: unknown) {
+      return synthesisErrorResponse(error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_DISCOVERY', '获取声音列表失败，请检查服务配置。', 502, true));
     }
   });
 
@@ -372,41 +409,40 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
   app.post(`${base}/tts/generate`, async (c) => {
     let body: TTSGenerateRequest;
     try {
-      body = await c.req.json<TTSGenerateRequest>();
-    } catch {
-      return c.json({ error: '无效的 JSON 请求体' }, 400);
+      body = parseGenerateRequest(await c.req.json());
+    } catch (error) {
+      return synthesisErrorResponse(error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_INPUT', '无效的 JSON 请求体。', 400));
     }
 
     const providerId = resolveProviderId(c, body.provider);
     let provider;
     try {
       provider = getProvider(providerId);
-    } catch (e: any) {
-      return c.json({ error: e?.message }, 400);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
     }
 
-    const apiKey = resolveKeyForProvider(c, providerId);
+    const apiKey = resolveKeyForProvider(c, providerId, body.apiKey);
 
-    if (!apiKey) {
-      return c.json({
-        error: `缺少 ${provider.displayName} API Key。请在请求头 x-${providerId}-api-key 中传入，或在服务端 .env 中配置。`,
-      }, 401);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key。请在请求头、请求体或服务端环境变量中配置。`, 401));
     }
 
     if (!body.text || body.text.trim().length === 0) {
-      return c.json({ error: '朗读文本不能为空' }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_TEXT', '朗读文本不能为空。', 400));
     }
     if (!body.voiceName || body.voiceName.trim().length === 0) {
-      return c.json({ error: '未指定音色 voiceName' }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_VOICE', '未指定音色 voiceName。', 400));
     }
     if (providerId === 'gemini' && (!body.model || body.model.trim().length === 0)) {
-      return c.json({ error: '未指定模型 model' }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_MODEL', '未指定模型 model。', 400));
     }
 
     try {
       const { audioBuffer, mimeType } = await provider.synthesize(
         { ...body, provider: providerId, region: body.region || resolveRegionForProvider(c) },
-        apiKey
+        apiKey,
+        { signal: c.req.raw.signal }
       );
 
       // 直接输出二进制音频流（HTTP 边界转为标准 Uint8Array，消除 Buffer 池化偏移与类型摩擦）
@@ -416,14 +452,13 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
         status: 200,
         headers: {
           'Content-Type': mimeType,
-          'Content-Disposition': `inline; filename="${providerId}-speech.${mimeType.includes('mp3') ? 'mp3' : 'wav'}"`,
+          'Content-Disposition': `inline; filename="${providerId}-speech.${audioExtension(mimeType)}"`,
           'Content-Length': audioBuffer.length.toString(),
           'Cache-Control': 'no-cache',
         },
       });
-    } catch (error: any) {
-      console.error('TTS 生成失败:', error);
-      return c.json({ error: prettyApiError(error?.message) || '生成音频失败' }, 500);
+    } catch (error: unknown) {
+      return synthesisErrorResponse(error);
     }
   });
 
@@ -436,34 +471,32 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
   app.post(`${base}/tts/stream`, async (c) => {
     let body: TTSGenerateRequest;
     try {
-      body = await c.req.json<TTSGenerateRequest>();
-    } catch {
-      return c.json({ error: '无效的 JSON 请求体' }, 400);
+      body = parseGenerateRequest(await c.req.json());
+    } catch (error) {
+      return synthesisErrorResponse(error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_INPUT', '无效的 JSON 请求体。', 400));
     }
 
     const providerId = resolveProviderId(c, body.provider);
     let provider;
     try {
       provider = getProvider(providerId);
-    } catch (e: any) {
-      return c.json({ error: e?.message }, 400);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
     }
 
-    const apiKey = resolveKeyForProvider(c, providerId);
-    if (!apiKey) {
-      return c.json({
-        error: `缺少 ${provider.displayName} API Key。请在请求头 x-${providerId}-api-key 中传入，或在服务端 .env 中配置。`,
-      }, 401);
+    const apiKey = resolveKeyForProvider(c, providerId, body.apiKey);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key。请在请求头、请求体或服务端环境变量中配置。`, 401));
     }
 
     if (!body.text || body.text.trim().length === 0) {
-      return c.json({ error: '朗读文本不能为空' }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_TEXT', '朗读文本不能为空。', 400));
     }
     if (!body.voiceName || body.voiceName.trim().length === 0) {
-      return c.json({ error: '未指定音色 voiceName' }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_VOICE', '未指定音色 voiceName。', 400));
     }
     if (providerId === 'gemini' && (!body.model || body.model.trim().length === 0)) {
-      return c.json({ error: '未指定模型 model' }, 400);
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_MODEL', '未指定模型 model。', 400));
     }
 
     const params = { ...body, provider: providerId, region: body.region || resolveRegionForProvider(c) };
@@ -478,17 +511,17 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
           if (provider.synthesizeStream) {
             const { mimeType } = await provider.synthesizeStream(params, apiKey, async (chunk) => {
               send({ audio: chunk.audioBase64, mimeType: chunk.mimeType });
-            });
+            }, { signal: c.req.raw.signal });
             send({ done: true, mimeType });
           } else {
             // 降级：一次性合成后单包下发，前端同一套解析
-            const { audioBuffer, mimeType } = await provider.synthesize(params, apiKey);
+            const { audioBuffer, mimeType } = await provider.synthesize(params, apiKey, { signal: c.req.raw.signal });
             send({ audio: audioBuffer.toString('base64'), mimeType });
             send({ done: true, mimeType });
           }
-        } catch (error: any) {
-          console.error('TTS 流式生成失败:', error);
-          send({ error: prettyApiError(error?.message) || '流式生成音频失败' });
+        } catch (error: unknown) {
+          const safe = error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_UPSTREAM', '流式生成音频失败，请检查服务配置。', 502, true);
+          send({ error: safe.message, code: safe.code, retryable: safe.retryable });
         } finally {
           controller.close();
         }
