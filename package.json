@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "通用 TTS 服务：Gemini / Azure 语音合成、流式输出与自定义音色，Hono 中间件式挂载",
+  "license": "MIT",
   "exports": {
     "./server": {
       "types": "./lib/server/app.d.ts",

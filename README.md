@@ -44,9 +44,12 @@ bun run dev            # 后端 :3001 + 前端 :5173
 ```bash
 GET /api/health                        # { status, hasServerKey, providers: { gemini, azure }, timestamp }
 GET /api/providers                     # 已注册厂商及默认模型/音色
-GET /api/models?provider=gemini        # 动态模型列表（Gemini 实时拉取，Azure 返回固定档位）
+GET /api/models?provider=gemini        # 动态模型列表（Gemini 经原生 SDK 实时拉取；Azure 无模型概念，返回空列表）
+GET /api/models/gemini-3.8-flash-tts   # 指定模型详情（原生 SDK models.get）
 GET /api/voices?provider=azure&region=japaneast
 ```
+
+失败显式化：无 Key 返回 `401`，未知厂商/缺参返回 `400`，远端失败返回 `500` 并携带原文；**无任何本地兜底数据**，合成缺 `text` / `voiceName`（Gemini 另需 `model`）直接拒绝。
 
 ### 语音合成
 
@@ -152,6 +155,10 @@ const myProvider: TTSProvider = {
 ## 发布
 
 `package.json` 已就绪（`exports`/`files`/`prepublishOnly`），仓库 Actions 在 Release 发布时自动 `build:lib` 并 `npm publish`（需在仓库 Secrets 配 `NPM_TOKEN`）。发新版前先 bump `version`。
+
+## 许可证
+
+MIT，见 [LICENSE](./LICENSE)。
 
 ## 目录结构
 
