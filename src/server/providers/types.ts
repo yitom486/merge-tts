@@ -1,4 +1,5 @@
 import type { ModelInfo, TTSGenerateRequest, VoiceInfo } from '../types';
+import type { NormalizedBatchCreateInput, TTSBatchJobStatus } from '../batch';
 
 /**
  * 通用 TTS 适配器接口
@@ -35,6 +36,14 @@ export interface TTSProvider {
 
   /** 各家 Key 解析规则，默认读 `x-{id}-api-key` + 同名环境变量 */
   resolveApiKey?: (headerKey?: string) => string;
+
+  /**
+   * 官方异步 Batch（可选）：未实现时路由返回 400，绝不静默降级为并发扇出。
+   * B 语义 = 建 job → 轮询 → 逐项取音频，便宜 50% 但小时级。
+   */
+  createBatchJob?: (apiKey: string, input: NormalizedBatchCreateInput) => Promise<{ name: string; state: string; model?: string; displayName?: string }>;
+  getBatchJob?: (apiKey: string, name: string) => Promise<TTSBatchJobStatus>;
+  cancelBatchJob?: (apiKey: string, name: string) => Promise<{ name: string; cancelled: boolean }>;
 
   defaultModel?: string;
   defaultVoice?: string;

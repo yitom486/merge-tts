@@ -8,10 +8,10 @@ bun.lockb
 .env.local
 .env.*.local
 
-# Build output
+# Build output (root only: narrowing the rule so src/client/lib/ stays tracked)
 dist/
 dist-ssr/
-lib/
+/lib/
 *.local
 
 # Logs

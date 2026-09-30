@@ -75,12 +75,6 @@ export function App() {
   const hasConfiguredKey = Boolean(activeLocalKey || activeServerKey);
   const isGemini = provider === 'gemini';
 
-  const handleResetSample = () => {
-    setText(
-      `Welcome to Gemini 3.8 TTS Studio. [laughs] Listen to how natural and expressive speech can truly be. [short pause] Notice the nuanced pacing, and how emotional inflection carries through every syllable. [whispers] Try listening with headphones to feel the recording studio presence.`
-    );
-  };
-
   return (
     <div className="min-h-screen flex flex-col bg-[hsl(var(--bg-app))] text-[hsl(var(--fg-primary))]">
       {/* 顶部全局导航（内置一键生成按键与动态模型状态） */}
@@ -160,7 +154,6 @@ export function App() {
               <Editor
                 text={text}
                 onChange={setText}
-                onReset={handleResetSample}
                 isGenerating={isGenerating}
                 onGenerate={generateAudio}
               />

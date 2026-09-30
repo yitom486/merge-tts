@@ -8,6 +8,7 @@ import type { TTSProvider } from './providers/types';
 import type { TTSGenerateRequest } from './types';
 import { synthesizeUnified, UnifiedSynthesisError } from './unified';
 import type { UnifiedSynthesizeRequest } from './unified';
+import { validateBatchCreateInput } from './batch';
 
 // ---- 对外重导出：别的项目挂载后可直接扩展 ----
 export { registerProvider, getProvider, listProviders };
@@ -18,6 +19,11 @@ export type { LocalTTSOptions } from './providers/local';
 export type { TTSProvider } from './providers/types';
 export type { TTSGenerateRequest, ModelInfo, VoiceInfo, ModelCategory, ModelTier } from './types';
 export { synthesizeUnified, UnifiedSynthesisError } from './unified';
+export { validateBatchCreateInput, normalizeBatchJob, extractBatchItemAudio, MAX_BATCH_ITEMS } from './batch';
+export type {
+  TTSBatchCreateInput, TTSBatchItemInput, NormalizedBatchCreateInput,
+  TTSBatchItemResult, TTSBatchJobStatus,
+} from './batch';
 export type {
   UnifiedSynthesizeRequest, UnifiedSynthesizeSuccess, UnifiedSynthesizeFailure,
   UnifiedVoicePreference, UnifiedCredentials, ServiceErrorInfo,
@@ -584,6 +590,108 @@ export function createTTSApp(options: TTSAppOptions = {}): Hono {
         preferredError: { provider: 'unknown', message: '统一合成失败，请检查服务配置' },
         fallbackError: null,
       }, 500);
+    }
+  });
+
+  /**
+   * POST {base}/tts/batch-jobs
+   * 官方异步 Batch（仅 gemini）：{ provider='gemini', model, voiceName?, speechMetadata?,
+   * languageCode?, displayName?, items: [{ text, voiceName?, speechMetadata?, languageCode?, key? }] }
+   * 缺参 400 / 缺 Key 401 / 非 gemini 400；返回 { name, state, model?, displayName? }，调用方轮询 GET。
+   */
+  app.post(`${base}/tts/batch-jobs`, async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return c.json({ error: '无效的 JSON 请求体' }, 400);
+    }
+    const providerId = resolveProviderId(c, (raw as any)?.provider);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
+    }
+    if (!provider.createBatchJob) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_UNSUPPORTED', `该厂商暂不支持官方异步批量（provider=${providerId}）。`, 400));
+    }
+    const apiKey = resolveKeyForProvider(c, providerId, (raw as any)?.apiKey);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key。`, 401));
+    }
+    let input;
+    try {
+      input = validateBatchCreateInput(raw);
+    } catch (error) {
+      return synthesisErrorResponse(error instanceof LocalTTSError ? error : new LocalTTSError('E_TTS_INPUT', '无效的批量请求体。', 400));
+    }
+    try {
+      return c.json(await provider.createBatchJob(apiKey, input));
+    } catch (error: any) {
+      return c.json({ error: error?.message || '创建批量任务失败' }, 500);
+    }
+  });
+
+  /**
+   * GET {base}/tts/batch-jobs?name=batches/xxx
+   * 轮询批量任务：name 含斜杠，走 query 传参。成功且完成时带 results（逐项 ok/audioBase64/mimeType/error）。
+   */
+  app.get(`${base}/tts/batch-jobs`, async (c) => {
+    const providerId = resolveProviderId(c);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
+    }
+    if (!provider.getBatchJob) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_UNSUPPORTED', `该厂商暂不支持官方异步批量（provider=${providerId}）。`, 400));
+    }
+    const name = (c.req.query('name') || '').trim();
+    if (!name) return c.json({ error: '缺少批量任务 name（query ?name=batches/xxx）。' }, 400);
+    const apiKey = resolveKeyForProvider(c, providerId);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key。`, 401));
+    }
+    try {
+      return c.json(await provider.getBatchJob(apiKey, name));
+    } catch (error: any) {
+      return c.json({ error: error?.message || '查询批量任务失败' }, 500);
+    }
+  });
+
+  /**
+   * POST {base}/tts/batch-jobs/cancel
+   * body { name }：取消未完成的批量任务。
+   */
+  app.post(`${base}/tts/batch-jobs/cancel`, async (c) => {
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: '无效的 JSON 请求体' }, 400);
+    }
+    const providerId = resolveProviderId(c, body.provider);
+    let provider;
+    try {
+      provider = getProvider(providerId);
+    } catch {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_PROVIDER', '未知 TTS provider。', 400));
+    }
+    if (!provider.cancelBatchJob) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_UNSUPPORTED', `该厂商暂不支持官方异步批量（provider=${providerId}）。`, 400));
+    }
+    const name = String(body?.name || '').trim();
+    if (!name) return c.json({ error: '缺少批量任务 name。' }, 400);
+    const apiKey = resolveKeyForProvider(c, providerId, body.apiKey);
+    if (!apiKey && provider.requiresApiKey !== false) {
+      return synthesisErrorResponse(new LocalTTSError('E_TTS_AUTH', `缺少 ${provider.displayName} API Key。`, 401));
+    }
+    try {
+      return c.json(await provider.cancelBatchJob(apiKey, name));
+    } catch (error: any) {
+      return c.json({ error: error?.message || '取消批量任务失败' }, 500);
     }
   });
 

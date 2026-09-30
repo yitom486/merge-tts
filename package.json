@@ -1,6 +1,6 @@
 {
   "name": "gemini-tts-studio",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "通用 TTS 服务：Gemini / Azure / 本地 OpenAI 兼容语音合成，Hono 中间件式挂载",
   "license": "MIT",
@@ -22,12 +22,13 @@
   "scripts": {
     "dev:server": "bun --watch src/server/index.ts",
     "dev:client": "vite",
-    "dev": "concurrently \"bun run dev:server\" \"bun run dev:client\"",
-    "dev:all": "concurrently \"bun run dev:server\" \"bun run dev:client\"",
+    "dev": "bun run --parallel dev:server dev:client",
+    "dev:all": "bun run --parallel dev:server dev:client",
     "build": "vite build",
     "build:lib": "bun scripts/build-lib.ts",
     "test": "bun test tests",
     "typecheck": "bunx tsc --noEmit",
+    "check": "bunx tsc --noEmit && bun test tests",
     "prepublishOnly": "bun run build:lib",
     "preview": "vite preview",
     "start": "bun src/server/index.ts"
@@ -54,7 +55,6 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.0",
     "tailwindcss": "^4.1.1",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"

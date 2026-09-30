@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import type { ModelCategory, ModelInfo, ModelTier, TTSGenerateRequest, VoiceInfo } from '../types';
 import type { TTSProvider } from './types';
+import { normalizeBatchJob, type NormalizedBatchCreateInput, type TTSBatchJobStatus } from '../batch';
 
 /** 自定义音色 ID（voice_… / voicekey_…）走 voice 直引，预置名走 prebuiltVoiceConfig */
 export function resolveVoiceConfig(voiceName: string): any {
@@ -561,6 +562,94 @@ export async function synthesizeGeminiStream(
   return { mimeType };
 }
 
+/**
+ * 官方异步 Batch：单音色多文本（fifty-kana 场景）。
+ * 双人对话不进批量：items 不带 speakers，发现 Speaker 标记直接 400，调用方请走单次合成。
+ */
+function buildBatchInlineRequest(
+  model: string,
+  item: { text: string; voiceName: string; speechMetadata: string; languageCode: string; key: string }
+): any {
+  if (/speaker\s*[12]\s*:/i.test(item.text)) {
+    throw new Error(`key=${item.key} 的文本含 Speaker 标记：批量暂不支持双人对话，请走单次合成`);
+  }
+  return {
+    contents: [{
+      role: 'user',
+      parts: [{
+        text: item.text,
+        ...(item.speechMetadata ? { speechMetadata: { style: item.speechMetadata } } : {}),
+      }],
+    }],
+    config: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: resolveVoiceConfig(item.voiceName),
+        ...(item.languageCode ? { languageCode: item.languageCode } : {}),
+      },
+    },
+    metadata: { key: item.key },
+  };
+}
+
+export async function createGeminiBatchJob(
+  apiKey: string,
+  input: NormalizedBatchCreateInput
+): Promise<{ name: string; state: string; model?: string; displayName?: string }> {
+  if (!apiKey) {
+    throw new Error('未检测到 Gemini API Key。请在前端设置中填入或在服务端配置 GEMINI_API_KEY。');
+  }
+  const ai = new GoogleGenAI({ apiKey });
+  const src = input.items.map((it) => buildBatchInlineRequest(input.model, it));
+  let job: any;
+  try {
+    job = await ai.batches.create({
+      model: input.model,
+      src,
+      ...(input.displayName ? { config: { displayName: input.displayName } } : {}),
+    } as any);
+  } catch (err: any) {
+    throw new Error(`创建批量任务失败：${err?.message || err}`);
+  }
+  const state = typeof job?.state === 'string' ? job.state : String(job?.state?.name || job?.state || 'UNKNOWN');
+  return {
+    name: String(job?.name || ''),
+    state,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+  };
+}
+
+export async function getGeminiBatchJob(apiKey: string, name: string): Promise<TTSBatchJobStatus> {
+  if (!apiKey) {
+    throw new Error('未检测到 Gemini API Key。请在前端设置中填入或在服务端配置 GEMINI_API_KEY。');
+  }
+  const cleanName = (name || '').trim();
+  if (!cleanName) throw new Error('未指定批量任务 name');
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    const job: any = await ai.batches.get({ name: cleanName } as any);
+    return normalizeBatchJob(job);
+  } catch (err: any) {
+    throw new Error(`查询批量任务失败：${err?.message || err}`);
+  }
+}
+
+export async function cancelGeminiBatchJob(apiKey: string, name: string): Promise<{ name: string; cancelled: boolean }> {
+  if (!apiKey) {
+    throw new Error('未检测到 Gemini API Key。请在前端设置中填入或在服务端配置 GEMINI_API_KEY。');
+  }
+  const cleanName = (name || '').trim();
+  if (!cleanName) throw new Error('未指定批量任务 name');
+  const ai = new GoogleGenAI({ apiKey });
+  try {
+    await ai.batches.cancel({ name: cleanName } as any);
+  } catch (err: any) {
+    throw new Error(`取消批量任务失败：${err?.message || err}`);
+  }
+  return { name: cleanName, cancelled: true };
+}
+
 export const geminiProvider: TTSProvider = {
   id: 'gemini',
   displayName: 'Google Gemini TTS',
@@ -570,4 +659,7 @@ export const geminiProvider: TTSProvider = {
   getModelDetail: fetchModelDetail,
   synthesize: generateTTSAudio,
   synthesizeStream: synthesizeGeminiStream,
+  createBatchJob: createGeminiBatchJob,
+  getBatchJob: getGeminiBatchJob,
+  cancelBatchJob: cancelGeminiBatchJob,
 };

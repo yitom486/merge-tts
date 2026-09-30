@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { base64ToBytes, parsePcmRate, pcmChunksToWavBlob, PcmStreamPlayer } from '../lib/audio';
+import { base64ToBytes, parsePcmRate, audioChunksToBlob, isRawPcmMime, PcmStreamPlayer } from '../lib/audio';
 
 export type ModelCategory = 'tts' | 'live' | 'other';
 
@@ -32,8 +32,6 @@ export interface ProviderInfo {
   defaultVoice?: string;
 }
 
-const DEFAULT_SAMPLE_TEXT = `Welcome to Gemini 3.8 TTS Studio. [laughs] Listen to how natural and expressive speech can truly be. [short pause] Notice the nuanced pacing, and how emotional inflection carries through every syllable. [whispers] Try listening with headphones to feel the recording studio presence.`;
-
 const readLS = (key: string, fallback = '') => {
   if (typeof window === 'undefined') return fallback;
   return localStorage.getItem(key) || fallback;
@@ -61,7 +59,7 @@ export function useTTS() {
   const [selectedVoice, setSelectedVoice] = useState<string>('');
   const [isLoadingVoices, setIsLoadingVoices] = useState<boolean>(false);
 
-  const [text, setText] = useState<string>(DEFAULT_SAMPLE_TEXT);
+  const [text, setText] = useState<string>('');
   const [speechStyle, setSpeechStyle] = useState<string>('Natural & Expressive');
   const [language, setLanguage] = useState<string>(() => {
     if (typeof window === 'undefined') return '';
@@ -320,7 +318,7 @@ export function useTTS() {
   const fetchStreamChunks = useCallback(async (
     body: Record<string, unknown>,
     signal: AbortSignal | null | undefined,
-    onChunk?: (bytes: Uint8Array, sampleRate: number, index: number) => void | Promise<void>
+    onChunk?: (bytes: Uint8Array, sampleRate: number, index: number, mimeType: string) => void | Promise<void>
   ): Promise<{ chunks: Uint8Array[]; sampleRate: number; mimeType: string }> => {
     const headers = buildKeyHeaders(true);
     headers['Accept'] = 'text/event-stream';
@@ -363,7 +361,7 @@ export function useTTS() {
         const bytes = base64ToBytes(payload.audio);
         const index = chunks.length;
         chunks.push(bytes);
-        await onChunk?.(bytes, sampleRate, index);
+        await onChunk?.(bytes, sampleRate, index, mimeType);
       }
     };
 
@@ -398,27 +396,30 @@ export function useTTS() {
     return { chunks, sampleRate, mimeType };
   }, [buildKeyHeaders]);
 
-  // 流式生成：首包即播 + 实时进度，完成后拼 WAV 供回放/下载
+  // 流式生成：PCM 首包即播 + 实时进度，完成后按 mime 拼装供回放/下载。
+  // 非 PCM（Azure / 本地单包降级：完整 wav/mp3）不进实时播放器，只计数，
+  // 最终直接拼完整文件——绝不能再包一层 WAV 头。
   const generateAudioStream = useCallback(async () => {
     let player: PcmStreamPlayer | null = null;
-    const { chunks, sampleRate } = await fetchStreamChunks(
+    const { chunks, sampleRate, mimeType } = await fetchStreamChunks(
       buildRequestBody() as Record<string, unknown>,
       abortRef.current?.signal,
-      async (bytes, sr) => {
+      async (bytes, sr, _index, mime) => {
+        setStreamedChunks((c) => c + 1);
+        if (!isRawPcmMime(mime)) return;
         if (!player) {
           player = new PcmStreamPlayer(sr);
           playerRef.current = player;
           await player.resume();
         }
         player.pushChunk(bytes);
-        setStreamedChunks((c) => c + 1);
         setStreamedSeconds(player.playedSeconds);
       }
     );
 
-    // 拼完整 WAV：<audio> 回放 / 波形 / 下载共用
-    const wavBlob = pcmChunksToWavBlob(chunks, sampleRate);
-    finishWithBlob(wavBlob, audioUrl);
+    // 按 mime 拼装：PCM 包 WAV 头 / 完整文件直接拼接（<audio> 回放 / 波形 / 下载共用）
+    const audioBlob = audioChunksToBlob(chunks, mimeType, sampleRate);
+    finishWithBlob(audioBlob, audioUrl);
   }, [audioUrl, buildRequestBody, fetchStreamChunks, finishWithBlob]);
 
   // 生成音频主操作：优先流式边下边播，失败自动降级一次性
@@ -647,8 +648,10 @@ export function useTTS() {
 
       let livePlayer: PcmStreamPlayer | null = null;
       let firstChunkAt = 0;
-      const { chunks, sampleRate } = await fetchStreamChunks(body, controller.signal, async (bytes, sr) => {
+      const { chunks, sampleRate, mimeType } = await fetchStreamChunks(body, controller.signal, async (bytes, sr, _index, mime) => {
         if (seq !== auditionSeq.current) return;
+        // 非 PCM 单包（Azure / 本地）不进实时播放器：字节不是 PCM，硬塞只会放出噪声
+        if (!isRawPcmMime(mime)) return;
         if (!livePlayer) {
           livePlayer = new PcmStreamPlayer(sr);
           auditionPlayerRef.current = livePlayer;
@@ -659,9 +662,9 @@ export function useTTS() {
       });
       if (seq !== auditionSeq.current) return;
 
-      // 拼 WAV 入缓存：下次复听直接播
-      const wavBlob = pcmChunksToWavBlob(chunks, sampleRate);
-      const url = URL.createObjectURL(wavBlob);
+      // 按 mime 拼装入缓存：下次复听直接播
+      const auditionBlob = audioChunksToBlob(chunks, mimeType, sampleRate);
+      const url = URL.createObjectURL(auditionBlob);
       if (auditionCache.current.size > 24) {
         const firstKey = auditionCache.current.keys().next().value;
         if (firstKey) {
@@ -670,7 +673,17 @@ export function useTTS() {
         }
       }
       auditionCache.current.set(cacheKey, url);
-      // 直播已在播：按剩余时长自动清除试听态
+      if (!livePlayer) {
+        // 非 PCM 单包：没有实时流可播，直接播拼好的完整文件
+        const audio = new Audio(url);
+        if (seq !== auditionSeq.current) return;
+        auditionAudioRef.current = audio;
+        audio.onended = () => setAuditioningId((cur) => (cur === voiceId ? null : cur));
+        audio.onerror = () => setAuditioningId((cur) => (cur === voiceId ? null : cur));
+        await audio.play();
+        return;
+      }
+      // PCM 直播已在播：按剩余时长自动清除试听态
       const totalSec = chunks.reduce((n, c) => n + c.length, 0) / 2 / sampleRate;
       const elapsedSec = firstChunkAt > 0 ? (Date.now() - firstChunkAt) / 1000 : 0;
       const remainMs = Math.max(0, totalSec - elapsedSec) * 1000 + 300;

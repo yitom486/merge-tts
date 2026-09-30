@@ -26,6 +26,11 @@ bun run dev            # 后端 :3001 + 前端 :5173
 | `bun start` | 生产启动（含静态托管） |
 | `bun run build:lib` | 打包可发布的 server 库到 `lib/` |
 
+端口被占用（`EADDRINUSE` / vite 跳到 `:5174`）说明有旧进程没退：先停掉再起。
+Windows PowerShell：`Get-NetTCPConnection -LocalPort 3001,5173 -State Listen`
+看 `OwningProcess`，`Stop-Process -Id <pid> -Force` 后重跑 `bun run dev`。
+换端口也行：`$env:PORT=3002`（后端）+ `$env:VITE_PORT=5174`（前端），前端代理会自动跟随 `PORT`。
+
 ## 环境变量
 
 | 变量 | 说明 |
@@ -110,7 +115,6 @@ POST /api/tts/stream
 双人对话规则：剧本每行以 `Speaker 1:` / `Speaker 2:` 开头；未检测到双方标记时自动降级单人。`voice_` / `voicekey_` 开头的自定义音色 ID 可直接填入 `voiceName`。
 
 ### 统一合成（嵌入调用方，如 Lingua Studio）
-
 调用方**无需填写任何厂商默认模型/音色**，最小请求只需文本：
 
 ```bash
@@ -156,6 +160,78 @@ x-gemini-api-key: <key>                # 凭证也可在 body.credentials 里按
 ```
 
 缺参（空文本、未知厂商）返回 `400` 同构错误体。超时（默认 120s，可配）与调用方取消（`signal` / HTTP 断开）会立即拒绝等待中的调用。
+
+### 官方异步批量（仅 Gemini，fifty-kana 这类多文本场景）
+
+复用通用 Gemini Batch API：`model = gemini-3.8-flash-tts / gemini-3.8-flash-lite-tts`（模型页 Batch API Supported），每个 item 自带 `AUDIO + speechConfig`。异步 job 语义：创建后轮询，标准价 50%，目标 24h 内完成。双人对话不进批量（含 Speaker 标记的 item 建单即 400，请走单次合成）。
+
+```bash
+# 建单（共享默认值 + 逐条覆盖；缺 model / 有效音色 / 空文本一律 400）
+POST /api/tts/batch-jobs
+Content-Type: application/json
+x-gemini-api-key: <key>
+
+{
+  "provider": "gemini",
+  "model": "gemini-3.8-flash-tts",
+  "voiceName": "Kore",
+  "speechMetadata": "calm and friendly",
+  "displayName": "kana-46",
+  "items": [
+    { "key": "あ", "text": "あ" },
+    { "key": "い", "text": "い", "voiceName": "Puck" }
+  ]
+}
+# → { "name": "batches/xxx", "state": "JOB_STATE_PENDING", "model": "..." }
+
+# 轮询（name 含斜杠，走 query 传参；完成时带逐项 results）
+GET /api/tts/batch-jobs?name=batches%2Fxxx&provider=gemini
+# → { "name": "...", "state": "JOB_STATE_SUCCEEDED",
+#     "results": [{ "key": "あ", "ok": true, "audioBase64": "…", "mimeType": "audio/wav" },
+#                 { "key": "い", "ok": false, "error": "…" }] }
+
+# 取消未完成的任务
+POST /api/tts/batch-jobs/cancel
+{ "provider": "gemini", "name": "batches/xxx" }
+```
+
+包内直接调用（外部项目 `import ... from 'gemini-tts-studio/server'`）：`validateBatchCreateInput / normalizeBatchJob / extractBatchItemAudio` 及全部批量类型已导出；无头客户端对应 `client.createBatchJob / getBatchJob / cancelBatchJob`（见 `gemini-tts-studio/client`）。
+
+外部项目五十音建库示例（挂载复用同一套路由，也可直调 provider）：
+
+```ts
+import { createTTSApp } from 'gemini-tts-studio/server';
+import { createTTSClient } from 'gemini-tts-studio/client';
+
+// 方式一：挂载路由（网关/业务服务内复用）
+const app = createTTSApp({ prefix: '/tts-engine', corsOrigins: false, enableLogger: false });
+// POST /tts-engine/tts/batch-jobs → { name }，再轮询 GET /tts-engine/tts/batch-jobs?name=...
+
+// 方式二：无头客户端（宿主自渲染 UI 时用）
+const client = createTTSClient({ baseUrl: 'https://tts.example.com', headers: { 'x-gemini-api-key': key } });
+const kana = ['あ', 'い', 'う', 'え', 'お' /* …46 音 */];
+const { name } = await client.createBatchJob({
+  provider: 'gemini',
+  model: 'gemini-3.8-flash-tts',
+  voiceName: 'Kore',
+  speechMetadata: 'calm and friendly',
+  displayName: 'kana-46',
+  items: kana.map((t) => ({ key: t, text: t })),
+});
+// 轮询直到完成（官方异步 job，小时级；成功后一次性落盘本地，之后永远复用）
+for (;;) {
+  const job = await client.getBatchJob(name);
+  if (job.state === 'JOB_STATE_SUCCEEDED') {
+    for (const r of job.results || []) {
+      if (r.ok) await Bun.write(`./kana/${r.key}.wav`, Buffer.from(r.audioBase64!, 'base64'));
+      else console.error(r.key, r.error);
+    }
+    break;
+  }
+  if (/FAILED|CANCELLED|EXPIRED/.test(job.state)) throw new Error(`批量任务失败：${job.state}`);
+  await new Promise((r) => setTimeout(r, 60_000));
+}
+```
 
 ### 自定义音色（仅 Gemini）
 
@@ -263,6 +339,10 @@ const result = await client.synthesizeUnified({ text: '你好', language: 'zh-CN
 ### 0.2.0 → 0.3.0
 
 新增统一合成 `POST /api/tts/unified`（请求/成功/失败稳定类型见上，失败只兜底本地，`usedFallback` + 双原因显式返回）与客户端入口 `gemini-tts-studio/client`（`VoiceSettings` 组件 + `style.css` + 无头 `createTTSClient`）。旧路由与 `/server` 导出保持兼容。
+
+### 0.3.0 → 0.3.1
+
+新增官方异步批量（仅 Gemini）：`POST /api/tts/batch-jobs` 建单、`GET /api/tts/batch-jobs?name=...` 轮询（含逐项 `results`）、`POST /api/tts/batch-jobs/cancel` 取消。`TTSProvider` 新增可选 `createBatchJob / getBatchJob / cancelBatchJob`；`/server` 导出批量函数与类型，`/client` 增加同名无头方法。旧路由与导出保持兼容。
 
 ## 许可证
 

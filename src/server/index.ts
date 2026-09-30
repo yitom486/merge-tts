@@ -12,6 +12,9 @@ app.get('*', serveStatic({ path: './dist/index.html' }));
 const port = Number(process.env.PORT) || 3001;
 
 console.log(`[Gemini TTS Server] 正在以 Bun 原生服务启动在 http://localhost:${port}`);
+// 端口被占用（EADDRINUSE）时：先停掉旧进程再起
+// PowerShell: Get-NetTCPConnection -LocalPort 3001 -State Listen | % { Stop-Process -Id $_.OwningProcess -Force }
+// 或换端口：$env:PORT=3002; bun run dev:server（前端代理会自动跟随 PORT，见 vite.config.ts）
 
 export default {
   port,

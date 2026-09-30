@@ -18,7 +18,7 @@ await $`bunx tsc --declaration --emitDeclarationOnly --rootDir src --outDir lib 
 for (const f of fs.readdirSync('lib/client-lib')) {
   fs.renameSync(path.join('lib/client-lib', f), path.join('lib/client', f));
 }
-fs.rmdirSync('lib/client-lib');
+fs.rmSync('lib/client-lib', { recursive: true, force: true });
 
 await $`bunx @tailwindcss/cli -i src/client-lib/client.css -o lib/client/style.css`;
 

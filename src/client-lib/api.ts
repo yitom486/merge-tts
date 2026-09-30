@@ -2,12 +2,17 @@ import type {
   UnifiedSynthesizeRequest, UnifiedSynthesizeSuccess, UnifiedSynthesizeFailure,
 } from '../server/unified';
 import type { ModelInfo, VoiceInfo } from '../server/types';
+import type { TTSBatchCreateInput, TTSBatchJobStatus } from '../server/batch';
 
 export type {
   UnifiedSynthesizeRequest, UnifiedSynthesizeSuccess, UnifiedSynthesizeFailure,
   UnifiedVoicePreference, UnifiedCredentials, ServiceErrorInfo,
 } from '../server/unified';
 export type { ModelInfo, VoiceInfo } from '../server/types';
+export type {
+  TTSBatchCreateInput, TTSBatchItemInput, NormalizedBatchCreateInput,
+  TTSBatchItemResult, TTSBatchJobStatus,
+} from '../server/batch';
 
 export interface TTSClientOptions {
   /** 服务根地址，默认 ''（同源） */
@@ -94,6 +99,32 @@ export function createTTSClient(options: TTSClientOptions = {}) {
         method: 'DELETE', headers: resolveHeaders(false),
       });
       if (!res.ok) await throwForResponse(res, '删除音色失败');
+      return (await res.json()) as any;
+    },
+
+    /** 官方异步批量：建 job（返回 { name, state }，调用方轮询 getBatchJob） */
+    async createBatchJob(input: TTSBatchCreateInput): Promise<{ name: string; state: string; model?: string; displayName?: string }> {
+      const res = await fetch(url('/tts/batch-jobs'), {
+        method: 'POST', headers: resolveHeaders(true), body: JSON.stringify(input),
+      });
+      if (!res.ok) await throwForResponse(res, '创建批量任务失败');
+      return (await res.json()) as any;
+    },
+
+    /** 轮询批量任务（name 含斜杠，已做编码；完成时带逐项 results） */
+    async getBatchJob(name: string, provider = 'gemini'): Promise<TTSBatchJobStatus> {
+      const res = await fetch(url(`/tts/batch-jobs?name=${encodeURIComponent(name)}&provider=${encodeURIComponent(provider)}`), {
+        headers: resolveHeaders(false),
+      });
+      if (!res.ok) await throwForResponse(res, '查询批量任务失败');
+      return (await res.json()) as any;
+    },
+
+    async cancelBatchJob(name: string, provider = 'gemini'): Promise<{ name: string; cancelled: boolean }> {
+      const res = await fetch(url('/tts/batch-jobs/cancel'), {
+        method: 'POST', headers: resolveHeaders(true), body: JSON.stringify({ name, provider }),
+      });
+      if (!res.ok) await throwForResponse(res, '取消批量任务失败');
       return (await res.json()) as any;
     },
   };

@@ -1,10 +1,9 @@
 import React, { useRef } from 'react';
-import { RotateCcw, Trash2, Play, Loader2 } from 'lucide-react';
+import { Trash2, Play, Loader2 } from 'lucide-react';
 
 interface EditorProps {
   text: string;
   onChange: (val: string) => void;
-  onReset: () => void;
   isGenerating: boolean;
   onGenerate?: () => void;
 }
@@ -27,7 +26,6 @@ const VOCAL_TAGS: VocalTag[] = [
 export const Editor: React.FC<EditorProps> = ({
   text,
   onChange,
-  onReset,
   isGenerating,
   onGenerate,
 }) => {
@@ -100,16 +98,6 @@ export const Editor: React.FC<EditorProps> = ({
 
         {/* 文本操作 */}
         <div className="flex items-center space-x-1 shrink-0 ml-auto">
-          <button
-            type="button"
-            onClick={onReset}
-            disabled={isGenerating}
-            title="恢复默认示范文本"
-            className="p-1 rounded-md text-[hsl(var(--fg-muted))] hover:text-[hsl(var(--fg-primary))] hover:bg-[hsl(var(--bg-hover))] transition-colors cursor-pointer text-xs flex items-center space-x-1"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="text-[11px] hidden sm:inline">重置</span>
-          </button>
           <button
             type="button"
             onClick={() => onChange('')}
