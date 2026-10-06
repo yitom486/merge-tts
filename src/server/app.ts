@@ -105,7 +105,12 @@ export function parseGenerateRequest(value: unknown): TTSGenerateRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new LocalTTSError('E_TTS_INPUT', '请求体必须是 JSON 对象。', 400);
   const body = value as Record<string, unknown>;
   if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 20000) throw new LocalTTSError('E_TTS_TEXT', '朗读文本不能为空，且不能超过 20000 个字符。', 400);
-  if (typeof body.voiceName !== 'string' || !body.voiceName.trim() || body.voiceName.length > 200) throw new LocalTTSError('E_TTS_VOICE', '请指定有效的音色 voiceName。', 400);
+  const hasVoice = (typeof body.voiceName === 'string' && body.voiceName.trim().length > 0) ||
+    (Array.isArray(body.speakers) && body.speakers.length >= 2 && body.speakers.some(s => s && typeof s === 'object' && (s as any).voiceName));
+  if (!hasVoice) throw new LocalTTSError('E_TTS_VOICE', '请指定有效的音色 voiceName 或提供有效的双人音色 speakers。', 400);
+  if (!body.voiceName && Array.isArray(body.speakers) && (body.speakers[0] as any)?.voiceName) {
+    body.voiceName = (body.speakers[0] as any).voiceName;
+  }
   for (const field of ['provider', 'model', 'endpoint', 'apiKey', 'format', 'region', 'languageCode', 'speechMetadata', 'style'] as const) {
     if (body[field] !== undefined && typeof body[field] !== 'string') throw new LocalTTSError('E_TTS_INPUT', `字段 ${field} 必须是字符串。`, 400);
   }
@@ -120,7 +125,36 @@ function synthesisErrorResponse(error: unknown): Response {
   if (error instanceof LocalTTSError) {
     return Response.json({ error: error.message, code: error.code, retryable: error.retryable }, { status: error.status });
   }
-  return Response.json({ error: '语音生成失败，请稍后重试或检查服务配置。', code: 'E_TTS_UPSTREAM', retryable: true }, { status: 502 });
+
+  const rawMsg = error instanceof Error ? error.message : String(error);
+  const prettyMsg = prettyApiError(rawMsg);
+
+  let status = 502;
+  let code = 'E_TTS_UPSTREAM';
+  let retryable = true;
+
+  const errObj = error as any;
+  const statusCode = errObj?.status || errObj?.statusCode || errObj?.code;
+  const is401 = statusCode === 401 || statusCode === 403 || /(?:401|403)|PERMISSION_DENIED|UNAUTHENTICATED|API_KEY_INVALID/i.test(rawMsg);
+  const is429 = statusCode === 429 || /(?:429)|RESOURCE_EXHAUSTED|RATE_LIMIT_EXCEEDED|insufficient_quota|quota/i.test(rawMsg);
+  const is400 = statusCode === 400 || /INVALID_ARGUMENT|bad request/i.test(rawMsg);
+
+  if (is401) {
+    status = 401;
+    code = 'E_TTS_AUTH';
+    retryable = false;
+  } else if (is429) {
+    status = 429;
+    code = /daily|monthly|insufficient_quota|balance|limit/i.test(rawMsg) ? 'E_TTS_QUOTA' : 'E_TTS_RATE_LIMIT';
+    retryable = code === 'E_TTS_RATE_LIMIT';
+  } else if (is400) {
+    status = 400;
+    code = 'E_TTS_INPUT';
+    retryable = false;
+  }
+
+  const finalMsg = prettyMsg || '语音生成失败，请稍后重试或检查服务配置。';
+  return Response.json({ error: finalMsg, code, retryable }, { status });
 }
 
 function audioExtension(mimeType: string): string {

@@ -31,6 +31,8 @@ export interface UnifiedSynthesizeRequest {
   /** 朗读用途（如 narration / dialogue / announcement），Gemini 下透传为风格指令 */
   purpose?: string;
   voicePreference?: UnifiedVoicePreference;
+  /** 双人/多角色对话发音人配置（2人及以上走 multiSpeakerVoiceConfig） */
+  speakers?: Array<{ speaker: string; voiceName?: string; voiceId?: string; gender?: 'female' | 'male' | 'neutral' }>;
   /** 首选服务，缺省 'gemini'；失败时只允许兜底到本地 TTS */
   preferredService?: string;
   /** 可选覆盖；缺省由包内解析（Gemini 取版本最高 TTS 模型，本地取发现首个模型） */
@@ -245,10 +247,23 @@ export async function synthesizeUnified(
       voice = pool[0].id;
     }
 
+    const resolvedSpeakers: Array<{ speaker: string; voiceName: string }> = [];
+    if (Array.isArray(input.speakers) && input.speakers.length >= 2) {
+      for (let i = 0; i < input.speakers.length; i++) {
+        const s = input.speakers[i];
+        const sVoice = (s.voiceName || s.voiceId || '').trim() || voice;
+        resolvedSpeakers.push({
+          speaker: s.speaker || `Speaker ${i + 1}`,
+          voiceName: sVoice,
+        });
+      }
+    }
+
     const params: TTSGenerateRequest = {
       provider: providerId,
       text,
       voiceName: voice,
+      ...(resolvedSpeakers.length >= 2 ? { speakers: resolvedSpeakers } : {}),
       ...(model ? { model } : {}),
       ...(providerId === 'gemini' && input.purpose ? { speechMetadata: input.purpose } : {}),
       ...(providerId === 'gemini' && input.language ? { languageCode: input.language } : {}),

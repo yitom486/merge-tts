@@ -420,32 +420,89 @@ function buildSpeechConfig(params: TTSGenerateRequest): any {
  * 仅靠引导语文本是不够的（会报 INVALID_ARGUMENT）。
  * 无标记行归入上一个说话人（开头无标记则归 Speaker 1）。
  */
-export function parseDialogueParts(text: string): Array<{ speaker: string; text: string }> {
+export function parseDialogueParts(
+  text: string,
+  declaredSpeakers?: Array<{ speaker: string; voiceName?: string }>
+): Array<{ speaker: string; text: string }> {
   const parts: Array<{ speaker: string; text: string }> = [];
-  for (const rawLine of text.split('\n')) {
+  const lines = text.split('\n');
+
+  const speakerRegex = /^(?:(?:speaker\s*(\d+))|([^\s:：\[\]【】]{1,20}))\s*[:：]\s*(.*)$/i;
+  const bracketRegex = /^\[([^\]]{1,20})\]\s*(.*)$|^【([^】]{1,20})】\s*(.*)$/;
+
+  const discoveredSpeakers: string[] = [];
+
+  for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
-    const m = line.match(/^speaker\s*(1|2)\s*:\s*(.*)$/i);
+
+    let speakerName: string | null = null;
+    let content = line;
+
+    const m = line.match(speakerRegex);
     if (m) {
-      const body = (m[2] || '').trim();
-      if (body) parts.push({ speaker: `Speaker ${m[1]}`, text: body });
+      if (m[1]) {
+        speakerName = `Speaker ${m[1]}`;
+      } else if (m[2]) {
+        speakerName = m[2].trim();
+      }
+      content = (m[3] || '').trim();
+    } else {
+      const mb = line.match(bracketRegex);
+      if (mb) {
+        speakerName = (mb[1] || mb[3] || '').trim();
+        content = (mb[2] || mb[4] || '').trim();
+      }
+    }
+
+    if (speakerName) {
+      if (!discoveredSpeakers.includes(speakerName)) {
+        discoveredSpeakers.push(speakerName);
+      }
+      if (content) {
+        parts.push({ speaker: speakerName, text: content });
+      }
     } else if (parts.length > 0) {
       parts[parts.length - 1].text += `\n${line}`;
     } else {
-      parts.push({ speaker: 'Speaker 1', text: line });
+      const defaultSpeaker = declaredSpeakers?.[0]?.speaker || 'Speaker 1';
+      parts.push({ speaker: defaultSpeaker, text: line });
+      if (!discoveredSpeakers.includes(defaultSpeaker)) {
+        discoveredSpeakers.push(defaultSpeaker);
+      }
     }
   }
+
+  // 若提供了 declaredSpeakers（2人），且剧本识别出了对应顺序的角色，动态映射对齐
+  if (declaredSpeakers && declaredSpeakers.length >= 2 && discoveredSpeakers.length >= 2) {
+    const declaredNames = new Set(declaredSpeakers.map(s => s.speaker));
+    const needsMapping = discoveredSpeakers.some(d => !declaredNames.has(d));
+    if (needsMapping) {
+      const map: Record<string, string> = {};
+      discoveredSpeakers.slice(0, 2).forEach((discovered, idx) => {
+        map[discovered] = declaredSpeakers[idx].speaker;
+      });
+      return parts
+        .map(p => ({
+          speaker: map[p.speaker] || p.speaker,
+          text: p.text,
+        }))
+        .filter(p => p.text.trim().length > 0);
+    }
+  }
+
   return parts.filter(p => p.text.trim().length > 0);
 }
 
-/** 是否为有效双人请求：开了开关 + 剧本含双方标记 + 音色不同 */
+/** 是否为有效双人请求：配置含双方且音色有效 + 剧本识别出至少两位说话人 */
 export function isDialogueRequest(params: TTSGenerateRequest): boolean {
   const speakers = (params.speakers || []).filter(s => s.speaker && s.voiceName);
   if (speakers.length < 2) return false;
-  const parts = parseDialogueParts(params.text || '');
+  const parts = parseDialogueParts(params.text || '', speakers);
   const names = new Set(parts.map(p => p.speaker));
-  return names.has('Speaker 1') && names.has('Speaker 2');
+  return names.size >= 2;
 }
+
 function buildContents(params: TTSGenerateRequest): string {
   const style = (params.speechMetadata || '').trim();
   if (style) {
@@ -462,7 +519,7 @@ function buildSdkContents(params: TTSGenerateRequest): any {
   if (isDialogueRequest(params)) {
     return [{
       role: 'user',
-      parts: parseDialogueParts(params.text).map(p => ({
+      parts: parseDialogueParts(params.text, params.speakers).map(p => ({
         text: p.text,
         speechMetadata: { speaker: p.speaker },
       })),

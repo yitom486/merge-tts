@@ -81,7 +81,7 @@ x-gemini-api-key: <key>                # 或 x-azure-api-key
   "languageCode": "en-us",             # 仅 Gemini
   "region": "japaneast",               # 仅 Azure
   "style": "cheerful",               # 仅 Azure；必须在所选音色 StyleList 中
-  "speakers": [                        # 仅 Gemini：双人对话（剧本须含 Speaker 1:/2: 标记）
+  "speakers": [                        # 仅 Gemini：双人对话（支持任意角色名，如 田中/李 或 Speaker 1/2）
     { "speaker": "Speaker 1", "voiceName": "Puck" },
     { "speaker": "Speaker 2", "voiceName": "Kore" }
   ]
@@ -112,7 +112,11 @@ POST /api/tts/stream
 # 收尾：data: {"done":true,"mimeType":"..."}   出错：data: {"error":"..."}
 ```
 
-双人对话规则：剧本每行以 `Speaker 1:` / `Speaker 2:` 开头；未检测到双方标记时自动降级单人。`voice_` / `voicekey_` 开头的自定义音色 ID 可直接填入 `voiceName`。
+双人对话规则（v0.3.2+）：
+- 支持多种剧本格式：`Speaker 1:` / `Speaker 2:`、角色名称如 `田中: ...` / `李: ...`、或中括号标记 `[Alice] ...` / `[Bob] ...`；
+- 若声明了 `speakers`（如 `[{ speaker: "Speaker 1", voiceName: "Puck" }, { speaker: "Speaker 2", voiceName: "Charon" }]`），系统自动将剧本中出现的角色按顺序映射到指定的说话人音色；
+- 连续未带前缀的台词自动归入上一位说话人；未识别出至少两位说话人时安全降级为单人发音；
+- `voice_` / `voicekey_` 开头的自定义音色 ID 可直接填入 `voiceName`。
 
 ### 统一合成（嵌入调用方，如 Lingua Studio）
 调用方**无需填写任何厂商默认模型/音色**，最小请求只需文本：
@@ -127,6 +131,10 @@ x-gemini-api-key: <key>                # 凭证也可在 body.credentials 里按
   "language": "zh-CN",
   "purpose": "narration",
   "voicePreference": { "gender": "female" },
+  "speakers": [                        # 双人对话可选：指定两位说话人音色
+    { "speaker": "Speaker 1", "voiceName": "Puck" },
+    { "speaker": "Speaker 2", "voiceName": "Charon" }
+  ],
   "preferredService": "gemini",
   "timeoutMs": 120000,
   "credentials": { "geminiApiKey": "<key>" }

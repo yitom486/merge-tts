@@ -1,6 +1,6 @@
 {
   "name": "gemini-tts-studio",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "通用 TTS 服务：Gemini / Azure / 本地 OpenAI 兼容语音合成，Hono 中间件式挂载",
   "license": "MIT",

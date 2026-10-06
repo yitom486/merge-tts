@@ -84,6 +84,74 @@ export function createTTSClient(options: TTSClientOptions = {}) {
       return data as UnifiedSynthesizeSuccess;
     },
 
+    /**
+     * 流式合成（SSE）：边生成边通过 onChunk 回调 base64 音频切片，
+     * 结束后 resolve（返回最终检测到的 mimeType）。
+     */
+    async synthesizeStream(
+      input: {
+        provider?: string;
+        text: string;
+        voiceName?: string;
+        model?: string;
+        speechMetadata?: string;
+        format?: 'wav' | 'mp3' | 'pcm' | 'ogg';
+        speakers?: Array<{ speaker: string; voiceName: string }>;
+        speed?: number;
+      },
+      onChunk: (chunk: { audioBase64: string; mimeType: string }) => void | Promise<void>,
+      signal?: AbortSignal
+    ): Promise<{ mimeType: string }> {
+      const res = await fetch(url('/tts/stream'), {
+        method: 'POST',
+        headers: resolveHeaders(true),
+        body: JSON.stringify(input),
+        signal,
+      });
+
+      if (!res.ok) {
+        await throwForResponse(res, '流式语音合成失败');
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('流式响应不可读');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let detectedMime = 'audio/L16;codec=pcm;rate=24000';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6).trim();
+              if (!dataStr || dataStr === '[DONE]') continue;
+              try {
+                const parsed = JSON.parse(dataStr);
+                if (parsed.error) throw new Error(parsed.error);
+                if (parsed.audio) {
+                  if (parsed.mimeType) detectedMime = parsed.mimeType;
+                  await onChunk({ audioBase64: parsed.audio, mimeType: detectedMime });
+                }
+              } catch (e: any) {
+                if (e.message && !e.message.includes('JSON')) throw e;
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      return { mimeType: detectedMime };
+    },
+
     async designVoice(input: {
       input: string; displayName?: string; gender?: string; languageCode?: string; model?: string;
     }): Promise<{ id?: string; displayName?: string; sampleAudio: { data: string; mimeType: string } | null }> {
