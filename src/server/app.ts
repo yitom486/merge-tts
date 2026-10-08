@@ -16,7 +16,7 @@ export { geminiProvider } from './providers/gemini';
 export { azureProvider } from './providers/azure';
 export { localProvider, createLocalTTSProvider, LocalTTSError } from './providers/local';
 export type { LocalTTSOptions } from './providers/local';
-export type { TTSProvider } from './providers/types';
+export type { SpeechBoundary, TTSProvider } from './providers/types';
 export type { TTSGenerateRequest, ModelInfo, VoiceInfo, ModelCategory, ModelTier } from './types';
 export { synthesizeUnified, UnifiedSynthesisError } from './unified';
 export { validateBatchCreateInput, normalizeBatchJob, extractBatchItemAudio, MAX_BATCH_ITEMS } from './batch';

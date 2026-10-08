@@ -1,6 +1,6 @@
 {
   "name": "gemini-tts-studio",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "description": "通用 TTS 服务：Gemini / Azure / 本地 OpenAI 兼容语音合成，Hono 中间件式挂载",
   "license": "MIT",
@@ -38,6 +38,7 @@
     "clsx": "^2.1.1",
     "hono": "^4.7.4",
     "lucide-react": "^1.16.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.52.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.0.2"

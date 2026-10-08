@@ -2,6 +2,25 @@ import type { ModelInfo, TTSGenerateRequest, VoiceInfo } from '../types';
 import type { NormalizedBatchCreateInput, TTSBatchJobStatus } from '../batch';
 
 /**
+ * 语音合成边界时间轴元数据（微软 Azure / 支持 SentenceBoundary 或 WordBoundary 的引擎）
+ * 用于正文跟读高亮、卡拉OK字幕与精准时间跳转
+ */
+export interface SpeechBoundary {
+  /** 文本内容（分句或分词） */
+  text: string;
+  /** 音频时间偏移量（毫秒，精确到 1ms） */
+  audioOffsetMs: number;
+  /** 持续时长（毫秒） */
+  durationMs: number;
+  /** 在原始文本中的字符偏移 */
+  textOffset?: number;
+  /** 词/句字符长度 */
+  wordLength?: number;
+  /** 边界类型：'SentenceBoundary' (整句) | 'WordBoundary' (单个词) | string */
+  boundaryType?: 'WordBoundary' | 'SentenceBoundary' | string;
+}
+
+/**
  * 通用 TTS 适配器接口
  * 新增厂商只需实现该接口并在 providers/index.ts 注册即可，
  * 前端与 Hono 路由无需改动。
@@ -21,7 +40,7 @@ export interface TTSProvider {
     params: TTSGenerateRequest,
     apiKey: string,
     context?: { signal?: AbortSignal }
-  ): Promise<{ audioBuffer: Buffer; mimeType: string }>;
+  ): Promise<{ audioBuffer: Buffer; mimeType: string; boundaries?: SpeechBoundary[] }>;
 
   /**
    * 流式合成（可选）：逐分片回调 base64 音频。
@@ -34,7 +53,7 @@ export interface TTSProvider {
     context?: { signal?: AbortSignal }
   ) => Promise<{ mimeType: string }>;
 
-  /** 各家 Key 解析规则，默认读 `x-{id}-api-key` + 同名环境变量 */
+  /** 各家 Key 解析规则，默认读 x-{id}-api-key + 同名环境变量 */
   resolveApiKey?: (headerKey?: string) => string;
 
   /**

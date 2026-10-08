@@ -1,5 +1,6 @@
+import * as sdk from 'microsoft-cognitiveservices-speech-sdk';
 import type { ModelInfo, TTSGenerateRequest, VoiceInfo } from '../types';
-import type { TTSProvider } from './types';
+import type { SpeechBoundary, TTSProvider } from './types';
 import { LocalTTSError } from './local';
 
 export function resolveAzureApiKey(headerKey?: string): string {
@@ -63,11 +64,42 @@ export function buildAzureSSML(text: string, voiceName: string, opts?: { speed?:
   return `<speak version="1.0" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="${locale}"><voice xml:lang="${locale}" name="${escapeXml(voiceName)}">${styled}</voice></speak>`;
 }
 
-function outputFormatFor(format?: string): { header: string; mimeType: string; ext: string } {
-  if (format === 'mp3') return { header: 'audio-24khz-48kbitrate-mono-mp3', mimeType: 'audio/mpeg', ext: 'mp3' };
-  if (format === 'pcm') return { header: 'raw-24khz-16bit-mono-pcm', mimeType: 'audio/pcm', ext: 'pcm' };
-  if (format === 'ogg') return { header: 'ogg-24khz-16bit-mono-opus', mimeType: 'audio/ogg', ext: 'ogg' };
-  return { header: 'riff-24khz-16bit-mono-pcm', mimeType: 'audio/wav', ext: 'wav' };
+function outputFormatFor(format?: string): {
+  header: string;
+  mimeType: string;
+  ext: string;
+  sdkFormat: sdk.SpeechSynthesisOutputFormat;
+} {
+  if (format === 'mp3') {
+    return {
+      header: 'audio-24khz-48kbitrate-mono-mp3',
+      mimeType: 'audio/mpeg',
+      ext: 'mp3',
+      sdkFormat: sdk.SpeechSynthesisOutputFormat.Audio24Khz48KBitRateMonoMp3,
+    };
+  }
+  if (format === 'pcm') {
+    return {
+      header: 'raw-24khz-16bit-mono-pcm',
+      mimeType: 'audio/pcm',
+      ext: 'pcm',
+      sdkFormat: sdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+    };
+  }
+  if (format === 'ogg') {
+    return {
+      header: 'ogg-24khz-16bit-mono-opus',
+      mimeType: 'audio/ogg',
+      ext: 'ogg',
+      sdkFormat: sdk.SpeechSynthesisOutputFormat.Ogg24Khz16BitMonoOpus,
+    };
+  }
+  return {
+    header: 'riff-24khz-16bit-mono-pcm',
+    mimeType: 'audio/wav',
+    ext: 'wav',
+    sdkFormat: sdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm,
+  };
 }
 
 /** Azure 没有“模型”概念：合成只认音色，返回空列表，前端展示“无需选择模型” */
@@ -141,7 +173,125 @@ export function stripPerformanceTags(text: string): string {
     .trim();
 }
 
-export async function synthesizeAzure(
+/**
+ * 官方 SDK 合成：建立 WebSocket 实时流式连接，同时捕获 SentenceBoundary 与 WordBoundary 时间轴
+ */
+export async function synthesizeAzureViaSdk(
+  params: TTSGenerateRequest,
+  apiKey: string,
+  explicitRegion?: string,
+  context?: { signal?: AbortSignal }
+): Promise<{ audioBuffer: Buffer; mimeType: string; boundaries: SpeechBoundary[] }> {
+  const key = apiKey || resolveAzureApiKey();
+  if (!key) {
+    throw new Error('未检测到 Azure Speech Key。请在前端设置中填入或在服务端配置 AZURE_SPEECH_KEY。');
+  }
+  const region = resolveAzureRegion(params.region || explicitRegion);
+  const voiceName = (params.voiceName || '').trim();
+  if (!voiceName) {
+    throw new Error('未指定音色 voiceName（如 zh-CN-XiaoxiaoNeural）');
+  }
+  const { mimeType, sdkFormat } = outputFormatFor(params.format);
+
+  const style = params.style?.trim();
+  if (style) {
+    const voices = await listAzureVoices(key, region, context);
+    const selected = voices.find(v => v.id === voiceName);
+    if (!selected) throw new LocalTTSError('E_AZURE_VOICE', '所选 Azure 音色不在当前区域的声音列表中。', 400);
+    if (!selected.styles?.includes(style)) throw new LocalTTSError('E_AZURE_STYLE', `音色 ${voiceName} 不支持风格 ${style}。`, 400);
+  }
+
+  const ssml = buildAzureSSML(stripPerformanceTags(params.text), voiceName, {
+    speed: params.speed,
+    pitch: params.pitch,
+    languageCode: params.languageCode,
+    style,
+  });
+
+  return new Promise((resolve, reject) => {
+    let completed = false;
+    const speechConfig = sdk.SpeechConfig.fromSubscription(key, region);
+    speechConfig.speechSynthesisOutputFormat = sdkFormat;
+
+    const synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
+    const boundaries: SpeechBoundary[] = [];
+
+    synthesizer.wordBoundary = (_sender, e) => {
+      const audioOffsetMs = Math.round((e.audioOffset || 0) / 10000);
+      const durationMs = e.duration ? Math.round(e.duration / 10000) : 0;
+      boundaries.push({
+        text: e.text,
+        audioOffsetMs,
+        durationMs,
+        textOffset: e.textOffset,
+        wordLength: e.wordLength,
+        boundaryType: e.boundaryType === sdk.SpeechSynthesisBoundaryType.Sentence ? 'SentenceBoundary' : 'WordBoundary',
+      });
+    };
+
+    const cleanup = () => {
+      if (!completed) {
+        completed = true;
+        try {
+          synthesizer.close();
+        } catch {}
+      }
+    };
+
+    const abortHandler = () => {
+      cleanup();
+      reject(new Error('Azure 合成已取消'));
+    };
+
+    if (context?.signal) {
+      if (context.signal.aborted) {
+        cleanup();
+        reject(new Error('Azure 合成已取消'));
+        return;
+      }
+      context.signal.addEventListener('abort', abortHandler, { once: true });
+    }
+
+    synthesizer.speakSsmlAsync(
+      ssml,
+      (result) => {
+        if (context?.signal) {
+          context.signal.removeEventListener('abort', abortHandler);
+        }
+        try {
+          if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
+            const audioBuffer = Buffer.from(result.audioData);
+            cleanup();
+            if (!audioBuffer || audioBuffer.byteLength === 0) {
+              reject(new Error('Azure API 未返回有效音频数据'));
+              return;
+            }
+            resolve({ audioBuffer, mimeType, boundaries });
+          } else {
+            const errDetails = result.errorDetails || `Azure SDK 合成未完成 (reason=${result.reason})`;
+            cleanup();
+            reject(new Error(errDetails));
+          }
+        } catch (err) {
+          cleanup();
+          reject(err);
+        }
+      },
+      (err) => {
+        if (context?.signal) {
+          context.signal.removeEventListener('abort', abortHandler);
+        }
+        cleanup();
+        reject(new Error(typeof err === 'string' ? err : (err as any)?.message || 'Azure SDK 合成错误'));
+      }
+    );
+  });
+}
+
+/**
+ * 原生 REST API 合成（兜底方案）
+ */
+export async function synthesizeAzureViaRest(
   params: TTSGenerateRequest,
   apiKey: string,
   explicitRegion?: string,
@@ -197,6 +347,24 @@ export async function synthesizeAzure(
     throw new Error('Azure API 未返回有效音频数据');
   }
   return { audioBuffer: Buffer.from(ab), mimeType };
+}
+
+export async function synthesizeAzure(
+  params: TTSGenerateRequest,
+  apiKey: string,
+  explicitRegion?: string,
+  context?: { signal?: AbortSignal }
+): Promise<{ audioBuffer: Buffer; mimeType: string; boundaries?: SpeechBoundary[] }> {
+  if (params.preferSdk !== false) {
+    try {
+      return await synthesizeAzureViaSdk(params, apiKey, explicitRegion, context);
+    } catch (sdkError: any) {
+      if (sdkError instanceof LocalTTSError) throw sdkError;
+      console.warn('[Azure TTS] 官方 Speech SDK 合成异常，降级至 REST 请求:', sdkError?.message || sdkError);
+    }
+  }
+
+  return synthesizeAzureViaRest(params, apiKey, explicitRegion, context);
 }
 
 export const azureProvider: TTSProvider = {

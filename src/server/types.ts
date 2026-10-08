@@ -14,6 +14,8 @@ export interface TTSGenerateRequest {
   format?: 'wav' | 'mp3' | 'pcm' | 'ogg';
   /** Azure 等需要 region：优先 body.region，其次服务端 AZURE_SPEECH_REGION */
   region?: string;
+  /** 是否启用官方 SDK 精准时间轴与边界事件对齐（默认 true，若环境不支持或单元测试可设为 false） */
+  preferSdk?: boolean;
   /** Local OpenAI-compatible endpoint, e.g. http://127.0.0.1:8880/v1/audio/speech. Request overrides must be loopback. */
   endpoint?: string;
   /** Optional per-request credential for the local provider only. Never returned in responses. */

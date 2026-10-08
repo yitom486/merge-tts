@@ -1,5 +1,5 @@
 import type { TTSGenerateRequest, VoiceInfo } from './types';
-import type { TTSProvider } from './providers/types';
+import type { SpeechBoundary, TTSProvider } from './providers/types';
 import { getProvider as registryGetProvider } from './providers';
 
 /**
@@ -276,7 +276,7 @@ export async function synthesizeUnified(
       warnings.push('朗读用途（purpose）仅 Gemini 生效，当前服务将忽略');
     }
 
-    const { audioBuffer, mimeType } = await provider.synthesize(params, key, { signal });
+    const { audioBuffer, mimeType, boundaries } = await provider.synthesize(params, key, { signal });
     return {
       ok: true,
       audioBase64: audioBuffer.toString('base64'),

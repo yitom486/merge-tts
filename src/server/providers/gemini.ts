@@ -546,18 +546,33 @@ export async function generateTTSAudio(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: buildSdkContents(params) as any,
-    config: {
-      responseModalities: ['AUDIO'],
-      speechConfig: buildSpeechConfig(params),
-      abortSignal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
-    },
-  });
+  const timeoutMs = 180000;
+  const timeoutCtrl = new AbortController();
+  const timer = setTimeout(() => {
+    timeoutCtrl.abort(new Error(`Gemini 音频生成超时（>${timeoutMs / 1000}s），已取消等待`));
+  }, timeoutMs);
+
+  const activeSignal = context?.signal
+    ? AbortSignal.any([context.signal, timeoutCtrl.signal])
+    : timeoutCtrl.signal;
+
+  let response: any;
+  try {
+    response = await ai.models.generateContent({
+      model: modelId,
+      contents: buildSdkContents(params) as any,
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: buildSpeechConfig(params),
+        abortSignal: activeSignal,
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const candidate = response.candidates?.[0];
-  const audioPart = candidate?.content?.parts?.find(p => p.inlineData && p.inlineData.data);
+  const audioPart = candidate?.content?.parts?.find((p: any) => p.inlineData && p.inlineData.data);
 
   if (!audioPart?.inlineData?.data) {
     throw new Error('Gemini API 未在返回结果中包含有效音频数据');
@@ -589,28 +604,53 @@ export async function synthesizeGeminiStream(
   }
   const ai = new GoogleGenAI({ apiKey });
 
-  const stream = await ai.models.generateContentStream({
-    model: modelId,
-    contents: buildSdkContents(params) as any,
-    config: {
-      responseModalities: ['AUDIO'],
-      speechConfig: buildSpeechConfig(params),
-      abortSignal: context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000),
-    },
-  });
+  // ===== 心跳保活与动态超时机制 =====
+  const heartbeatCtrl = new AbortController();
+  const activeSignal = context?.signal
+    ? AbortSignal.any([context.signal, heartbeatCtrl.signal])
+    : heartbeatCtrl.signal;
+
+  let heartbeatTimer: any = null;
+  const resetHeartbeat = (ms = 30000) => {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    heartbeatTimer = setTimeout(() => {
+      heartbeatCtrl.abort(new Error(`Gemini 流式传输心跳超时（超过 ${ms / 1000} 秒未收到新分片）`));
+    }, ms);
+  };
+
+  // 初始建立连接与等待首包的最长时间：45 秒
+  resetHeartbeat(45000);
 
   let mimeType = 'audio/L16;codec=pcm;rate=24000';
   let chunkCount = 0;
-  for await (const chunk of stream) {
-    const parts = chunk.candidates?.[0]?.content?.parts || [];
-    for (const part of parts) {
-      const inline = (part as any).inlineData;
-      if (inline?.data) {
-        chunkCount++;
-        if (inline.mimeType) mimeType = inline.mimeType;
-        await onChunk({ audioBase64: inline.data, mimeType });
+
+  try {
+    const stream = await ai.models.generateContentStream({
+      model: modelId,
+      contents: buildSdkContents(params) as any,
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: buildSpeechConfig(params),
+        abortSignal: activeSignal,
+      },
+    });
+
+    for await (const chunk of stream) {
+      // 只要持续有 chunk 到达，立即刷新心跳定时器（维持活跃状态，永不断流）
+      resetHeartbeat(30000);
+
+      const parts = chunk.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        const inline = (part as any).inlineData;
+        if (inline?.data) {
+          chunkCount++;
+          if (inline.mimeType) mimeType = inline.mimeType;
+          await onChunk({ audioBase64: inline.data, mimeType });
+        }
       }
     }
+  } finally {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
   }
 
   if (chunkCount === 0) {
@@ -710,6 +750,8 @@ export async function cancelGeminiBatchJob(apiKey: string, name: string): Promis
 export const geminiProvider: TTSProvider = {
   id: 'gemini',
   displayName: 'Google Gemini TTS',
+  defaultModel: 'gemini-3.8-flash-lite-tts',
+  defaultVoice: 'Aoede',
   resolveApiKey: resolveGeminiApiKey,
   listModels: fetchRemoteModels,
   listVoices: fetchRemoteVoices,

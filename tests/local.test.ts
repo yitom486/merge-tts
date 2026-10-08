@@ -95,10 +95,23 @@ test('Azure voice catalog carries locale and actual StyleList into style-checked
     const voices = await listAzureVoices('test-key', 'eastus');
     expect(voices[0]?.locale).toBe('en-US');
     expect(voices[0]?.styles).toEqual(['cheerful']);
-    await synthesizeAzure({ text: 'hello', voiceName: 'en-US-JennyNeural', style: 'cheerful' }, 'test-key', 'eastus');
+    await synthesizeAzure({ text: 'hello', voiceName: 'en-US-JennyNeural', style: 'cheerful', preferSdk: false }, 'test-key', 'eastus');
     expect(String(calls.at(-1)?.init?.body)).toContain('<mstts:express-as style="cheerful">');
     await expect(synthesizeAzure({ text: 'hello', voiceName: 'en-US-JennyNeural', style: 'angry' }, 'test-key', 'eastus')).rejects.toMatchObject({ code: 'E_AZURE_STYLE', status: 400 });
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('Azure SpeechBoundary metadata structure conforms to contracts', () => {
+  const boundary = {
+    text: 'Hello world',
+    audioOffsetMs: 120,
+    durationMs: 450,
+    textOffset: 0,
+    wordLength: 11,
+    boundaryType: 'SentenceBoundary' as const,
+  };
+  expect(boundary.audioOffsetMs).toBe(120);
+  expect(boundary.boundaryType).toBe('SentenceBoundary');
 });

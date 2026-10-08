@@ -9,3 +9,12 @@ export type {
 export type { ModelInfo, VoiceInfo } from './api';
 export { VoiceSettings } from './VoiceSettings';
 export type { VoiceSettingsProps } from './VoiceSettings';
+
+export {
+  PcmStreamPlayer,
+  audioChunksToBlob,
+  base64ToBytes,
+  parsePcmRate,
+  pcmChunksToWavBlob,
+  isRawPcmMime,
+} from '../client/lib/audio';

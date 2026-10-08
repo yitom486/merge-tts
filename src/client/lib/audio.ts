@@ -178,6 +178,18 @@ export class PcmStreamPlayer {
     }
   }
 
+  async pause(): Promise<void> {
+    if (this.closed) return;
+    const ctx = this.ensureContext();
+    if (ctx.state === 'running') {
+      await ctx.suspend();
+    }
+  }
+
+  get isPaused(): boolean {
+    return this.ctx?.state === 'suspended';
+  }
+
   pushChunk(bytes: Uint8Array): void {
     if (this.closed || !bytes || bytes.length === 0) return;
     const ctx = this.ensureContext();
